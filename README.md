@@ -44,6 +44,21 @@ This section covers installation, dataset preprocessing, and training.
 
 ### 🔧 Setup
 
+#### 方法一：使用自动化安装脚本（推荐）
+
+```bash
+git clone git@github.com:ucd-dare/VITA.git
+cd VITA
+bash init.sh
+```
+
+脚本会自动完成以下操作：
+- 创建并激活 conda 环境 `vita`
+- 安装所有必要的依赖
+- 设置环境变量 `FLARE_DATASETS_DIR`
+
+#### 方法二：手动安装
+
 ```bash
 git clone git@github.com:ucd-dare/VITA.git
 cd VITA
@@ -91,7 +106,6 @@ pip install -e .
 Our dataloaders extend [LeRobot](https://github.com/huggingface/lerobot), converting datasets into offline zarr format for faster training. We host datasets on HuggingFace. To list available datasets:
 
 ```bash
-# 
 cd gym-av-aloha/scripts
 python convert.py --ls
 ```
@@ -121,7 +135,7 @@ python convert.py -r iantc104/av_aloha_sim_hook_package
 ...
 
 # Robomimic
-python convert.py -r  iantc104/robomimic_sim_square
+python convert.py -r iantc104/robomimic_sim_square
 python convert.py -r iantc104/robomimic_sim_can
 ...
 ```
@@ -133,6 +147,12 @@ If you encounter errors with `cv2`, `numpy`, or `scipy` during the conversion, r
 ```bash
 pip uninstall opencv-python numpy scipy
 pip install opencv-python numpy scipy
+```
+
+**numpy/pandas 兼容性错误**: 如果遇到 `ValueError: numpy.dtype size changed` 错误，这通常是由于 numpy 和 pandas 版本不兼容导致的。解决方法：
+
+```bash
+pip install --upgrade --force-reinstall numpy pandas
 ```
 
 ---

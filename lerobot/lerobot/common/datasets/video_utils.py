@@ -29,14 +29,37 @@ import torchvision
 from datasets.features.features import register_feature
 from PIL import Image
 
+# Module-level cache for codec availability check
+_TORCHCODEC_AVAILABLE = None
+
 
 def get_safe_default_codec():
+    global _TORCHCODEC_AVAILABLE
+    
+    # Use cached result if available
+    if _TORCHCODEC_AVAILABLE is not None:
+        return "torchcodec" if _TORCHCODEC_AVAILABLE else "pyav"
+    
+    # Check if torchcodec module exists
     if importlib.util.find_spec("torchcodec"):
-        return "torchcodec"
+        # Try to actually import and use torchcodec to verify it works
+        try:
+            from torchcodec.decoders import VideoDecoder
+            # If import succeeds, torchcodec is available
+            _TORCHCODEC_AVAILABLE = True
+            return "torchcodec"
+        except (ImportError, RuntimeError, OSError) as e:
+            # torchcodec package exists but cannot be loaded (e.g., FFmpeg/libtorchcodec issues)
+            logging.warning(
+                f"'torchcodec' is installed but cannot be loaded ({str(e)}), falling back to 'pyav' as a default decoder"
+            )
+            _TORCHCODEC_AVAILABLE = False
+            return "pyav"
     else:
         logging.warning(
             "'torchcodec' is not available in your platform, falling back to 'pyav' as a default decoder"
         )
+        _TORCHCODEC_AVAILABLE = False
         return "pyav"
 
 
@@ -63,7 +86,14 @@ def decode_video_frames(
     if backend is None:
         backend = get_safe_default_codec()
     if backend == "torchcodec":
-        return decode_video_frames_torchcodec(video_path, timestamps, tolerance_s)
+        try:
+            return decode_video_frames_torchcodec(video_path, timestamps, tolerance_s)
+        except (ImportError, RuntimeError, OSError) as e:
+            # If torchcodec fails to load, fall back to pyav
+            logging.warning(
+                f"Failed to decode video with torchcodec ({str(e)}), falling back to 'pyav' backend"
+            )
+            return decode_video_frames_torchvision(video_path, timestamps, tolerance_s, "pyav")
     elif backend in ["pyav", "video_reader"]:
         return decode_video_frames_torchvision(video_path, timestamps, tolerance_s, backend)
     else:
@@ -187,12 +217,18 @@ def decode_video_frames_torchcodec(
     """
 
     if importlib.util.find_spec("torchcodec"):
-        from torchcodec.decoders import VideoDecoder
+        try:
+            from torchcodec.decoders import VideoDecoder
+        except (ImportError, RuntimeError, OSError) as e:
+            raise ImportError(f"torchcodec is installed but cannot be loaded: {str(e)}") from e
     else:
         raise ImportError("torchcodec is required but not available.")
 
     # initialize video decoder
-    decoder = VideoDecoder(video_path, device=device, seek_mode="approximate")
+    try:
+        decoder = VideoDecoder(video_path, device=device, seek_mode="approximate")
+    except (RuntimeError, OSError) as e:
+        raise RuntimeError(f"Failed to initialize torchcodec VideoDecoder: {str(e)}") from e
     loaded_frames = []
     loaded_ts = []
     # get metadata for frame information

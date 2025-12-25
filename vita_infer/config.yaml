@@ -1,0 +1,73 @@
+# VITA 推理服务配置文件
+
+server:
+  host: "0.0.0.0"
+  port: 8548
+
+model:
+  # VITA 模型 checkpoint 目录
+  checkpoint_dir: "/root/workspace/VITA/checkpoints/step_0000006000"
+  mixed_precision: "bf16" # 计算精度: bf16|fp16|fp32
+  device: "cuda:0" # 运行设备: cuda|cpu|cuda:0|cuda:1 (可指定具体GPU)
+
+client:
+  server_host: "127.0.0.1"
+  server_port: 8548
+  send_freq: 30 # 动作发送频率 (Hz)，与训练 fps 保持一致
+  max_steps: 1000
+  action_timeout: 5.0
+  log_dir: "./real_logs"
+
+# 机器人硬件配置
+datacenter:
+  arms:
+    right_arm:
+      base_topic: "/right_arm/manip_t/controller"
+      dof: 6
+
+  cameras:
+    wrist_right:
+      base_topic: "/right_arm/manip_t/sensor/camera"
+      streams:
+        rgb: true
+        depth: false
+    front:
+      base_topic: "/embodied/front/manip_t/sensor/camera"
+      streams:
+        rgb: true
+        depth: false
+
+  # 数据缓存配置
+  buffers:
+    action_buffer_size: 200
+    state_buffer_size: 30
+    camera_buffer_size: 30
+
+  # 数据同步配置
+  sync:
+    block_timeout: 100.0
+    check_interval: 0.01
+    timestamp_tolerance: 0.0015
+    sync_target: "image" # 同步目标: qpos 或 image
+
+# 模型输入输出映射配置
+mapping:
+  # 机械臂配置：模型训练时使用单臂（7维：6 dof + 1 gripper）
+  model_arm_order: ["right_arm"]
+  model_arm_dof: 6
+  use_gripper: true
+  fill_missing_arm: false
+
+  # 观测映射：模型期望键名 -> datacenter 数据源
+  model_obs_map:
+    observation.images.image: "front" # 主相机图像 <- front 相机
+    observation.images.wrist_right_image: "wrist_right" # 手腕图像 <- wrist_right 相机
+    observation.state: "qpos" # 机器人状态 <- qpos 数据
+
+  # 图像预处理配置
+  image:
+    normalize: true # 归一化到 [0, 1]
+    channel_order: "rgb" # 通道顺序: rgb|bgr
+    expected_size: [320, 240] # 期望图像尺寸: [宽, 高]
+    resize: true # 尺寸不匹配时是否缩放
+

@@ -29,4 +29,4 @@ services:
     gpus: all
     ipc: host
     mem_limit: 192g
-    cpus: 32
+    cpus: 24

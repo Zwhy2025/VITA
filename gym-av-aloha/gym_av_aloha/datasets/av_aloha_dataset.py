@@ -49,10 +49,11 @@ def create_av_aloha_dataset_from_lerobot(
     output_root = Path(root) if root else ROOT / repo_id
     # create lerobot datasets
     # If dataset_root is provided, use it for loading datasets; otherwise use default location
+    # Force using pyav backend to avoid torchcodec loading issues
     if dataset_root:
-        datasets = [LeRobotDataset(repo_id=r_id, root=Path(dataset_root) / r_id, episodes=episodes) for r_id, episodes in episodes.items()]
+        datasets = [LeRobotDataset(repo_id=r_id, root=Path(dataset_root) / r_id, episodes=episodes, video_backend="pyav") for r_id, episodes in episodes.items()]
     else:
-        datasets = [LeRobotDataset(repo_id=r_id, episodes=episodes) for r_id, episodes in episodes.items()]
+        datasets = [LeRobotDataset(repo_id=r_id, episodes=episodes, video_backend="pyav") for r_id, episodes in episodes.items()]
     # Disable any data keys that are not common across all of the datasets.
     disabled_features = set()
     intersection_features = set(datasets[0].features)
