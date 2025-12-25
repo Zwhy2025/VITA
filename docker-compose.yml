@@ -1,0 +1,32 @@
+services:
+  vita_project:
+    image: vita:latest
+    build: .
+    container_name: vita_container
+    privileged: true
+    working_dir: /root/workspace/VITA
+    environment:
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - NVIDIA_VISIBLE_DEVICES=all
+      - ACCEPT_EULA=Y
+      - PRIVACY_CONSENT=Y
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - container=docker
+    volumes:
+      - ~/workspace/:/root/workspace
+      - /mnt:/mnt
+      - "~/.Xauthority:/root/.Xauthority"
+      - /tmp:/tmp
+      - /dev:/dev
+    network_mode: host
+    runtime: nvidia
+    shm_size: "32gb"
+    ulimits:
+      memlock: -1
+    tty: true
+    stdin_open: true
+    gpus: all
+    ipc: host
+    mem_limit: 192g
+    cpus: 32
