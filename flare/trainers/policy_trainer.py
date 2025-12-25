@@ -59,7 +59,8 @@ class PolicyTrainer:
             dataset.num_frames,
             dataset.num_episodes,
             self.train_metrics,
-            initial_step=self.step_counter
+            initial_step=self.step_counter,
+            total_steps=num_total_steps
         )
 
     def train_step(self, batch):
@@ -165,6 +166,14 @@ class PolicyTrainer:
             num_steps = self.config.train.steps
 
         self.step_counter = start_step
+        
+        # 设置训练开始时间（每次调用train方法时重置）
+        self.train_start_time = time.time()
+        self.train_tracker._start_time = self.train_start_time
+        
+        # 更新总步数
+        self.train_tracker._total_steps = num_steps
+        
         dl_iter = cycle(self.train_dataloader)
 
         logger.info(f"Starting training from step {start_step} to {num_steps}")

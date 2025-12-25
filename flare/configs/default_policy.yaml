@@ -28,20 +28,27 @@ scheduler_warmup_steps: 500
 use_ema: true
 ema_power: 0.75
 
-# Training settings
+# original Training settings
+#  128 * 100000  = 12800000 frames
+#  512 * 20000   = 10240000 frames
+# train:
+#   steps: 100000
+#   batch_size: 128
+#   num_workers: 16
+
 train:
-  steps: 10000  
-  batch_size: 1024 
+  steps: 30000  
+  batch_size: 512 
   num_workers: 4  
   log_freq: 1  
   save_freq: 1000
   keep_freq: 20000
   grad_clip_norm: 1.0
-  save_best: true
+  save_best: false
 
 # Validation settings
 val:
-  num_episodes: 2 # Validation set episodes
+  num_episodes: 0 # Validation set episodes
   val_offline_freq: 0 # Validate on dataset
   val_online_freq: 0 # Validate in environment
   eval_n_episodes: 50

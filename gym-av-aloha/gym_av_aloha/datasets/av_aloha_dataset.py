@@ -257,8 +257,8 @@ class AVAlohaDataset(torch.utils.data.Dataset):
         self.episodes = episodes
 
         # create zarr dataset + lerobot metadata
-        #self.replay_buffer = ReplayBuffer.copy_from_path(self.root)
-        self.replay_buffer = ReplayBuffer.create_from_path(self.root, mode='r')
+        self.replay_buffer = ReplayBuffer.copy_from_path(self.root)
+        # self.replay_buffer = ReplayBuffer.create_from_path(self.root, mode='r')
         self.meta = AVAlohaDatasetMeta(repo_id=self.repo_id, root=self.root)
 
         # if no episodes are specified, use all episodes in the replay buffer

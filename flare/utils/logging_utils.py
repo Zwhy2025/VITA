@@ -1,4 +1,5 @@
 from typing import Any
+import time
 
 
 def format_big_number(num, precision=0):
@@ -11,6 +12,21 @@ def format_big_number(num, precision=0):
         num /= divisor
 
     return num
+
+
+def format_time(seconds):
+    """格式化时间显示为易读的格式"""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    elif seconds < 3600:
+        minutes = int(seconds // 60)
+        secs = seconds % 60
+        return f"{minutes}m{secs:.0f}s"
+    else:
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = seconds % 60
+        return f"{hours}h{minutes}m{secs:.0f}s"
 
 
 class AverageMeter:
@@ -79,6 +95,8 @@ class MetricsTracker:
         "samples",
         "episodes",
         "epochs",
+        "_start_time",
+        "_total_steps",
     ]
 
     def __init__(
@@ -88,6 +106,8 @@ class MetricsTracker:
         num_episodes: int,
         metrics: dict[str, AverageMeter],
         initial_step: int = 0,
+        total_steps: int = None,
+        start_time: float = None,
     ):
         self.__dict__.update({k: None for k in self.__keys__})
         self._batch_size = batch_size
@@ -101,6 +121,10 @@ class MetricsTracker:
         self.samples = self.steps * self._batch_size
         self.episodes = self.samples / self._avg_samples_per_ep
         self.epochs = self.samples / self._num_frames
+        
+        # 时间跟踪
+        self._start_time = start_time if start_time is not None else time.time()
+        self._total_steps = total_steps
 
     def __getattr__(self, name: str) -> int | dict[str, AverageMeter] | AverageMeter | Any:
         if name in self.__dict__:
@@ -138,6 +162,18 @@ class MetricsTracker:
             f"epch:{self.epochs:.2f}",
             *[str(m) for m in self.metrics.values()],
         ]
+        
+        # 添加时间信息
+        elapsed_time = time.time() - self._start_time
+        display_list.append(f"elapsed:{format_time(elapsed_time)}")
+        
+        # 如果有总步数，计算预估剩余时间
+        if self._total_steps is not None and self.steps > 0:
+            avg_time_per_step = elapsed_time / self.steps
+            remaining_steps = self._total_steps - self.steps
+            estimated_remaining = avg_time_per_step * remaining_steps
+            display_list.append(f"eta:{format_time(estimated_remaining)}")
+        
         return " ".join(display_list)
 
     def to_dict(self, use_avg: bool = True) -> dict[str, int | float]:
