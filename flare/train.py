@@ -87,6 +87,7 @@ def create_dataloader(dataset, cfg: DictConfig, is_training=True):
         sampler=sampler,
         pin_memory=True,
         drop_last=False,
+        persistent_workers=True,
     )
     return dataloader
 

@@ -4,11 +4,16 @@
 #       python convert.py -l
 # * Converting a single task dataset
 #       python convert.py -r iantc104/av_aloha_sim_thread_needle
+# * Converting a local dataset
+#       python convert.py -r /path/to/dataset
 # * Display help message
 #       python convert.py -h
 
 import argparse
+import os
+from pathlib import Path
 from gym_av_aloha.datasets.av_aloha_dataset import create_av_aloha_dataset_from_lerobot
+from lerobot.common.datasets.lerobot_dataset import LeRobotDatasetMetadata
 
 
 DATASET_CONFIGS = {
@@ -90,13 +95,83 @@ def list_datasets():
     print("--------------------------------------------------")
 
 
-def convert_dataset(repo_id: str):
-    if repo_id not in DATASET_CONFIGS:
-        print(f"Error: Repository ID '{repo_id}' not found in configurations.")
+def convert_dataset(repo_id_or_path: str):
+    # Check if it's a local path
+    dataset_path = Path(repo_id_or_path)
+    is_local_path = dataset_path.exists() and dataset_path.is_dir()
+    
+    if is_local_path:
+        # It's a local path, load metadata to get dataset info
+        try:
+            # Try to load metadata from the local path
+            # Use a dummy repo_id and force_cache_sync to avoid downloading from hub
+            dummy_repo_id = "local_dataset"
+            meta = LeRobotDatasetMetadata(dummy_repo_id, root=dataset_path, force_cache_sync=False)
+            total_episodes = meta.total_episodes
+            
+            # Generate a repo_id from the path (use the last two parts)
+            path_parts = dataset_path.parts
+            if len(path_parts) >= 2:
+                repo_id = f"{path_parts[-2]}/{path_parts[-1]}"
+            else:
+                repo_id = dataset_path.name
+            
+            # Default configuration for local datasets
+            config = {
+                "episodes": list(range(0, total_episodes)),
+                "remove_keys": [],  # Don't remove any keys by default
+                "image_size": None,  # Keep original size by default
+            }
+            
+            print(f"--- Converting Local Dataset: {dataset_path} ---")
+            print(f"Repository ID (generated): {repo_id}")
+            print(f"Total episodes: {total_episodes}")
+            print(f"Episodes to process: {len(config['episodes'])}")
+            print(f"Keys to remove: {config['remove_keys']}")
+            print(f"Target image size: {config['image_size'] or 'Original size'}")
+            print("------------------------------------------")
+            
+            episodes_dict = {repo_id: config["episodes"]}
+            
+            # For local datasets, we need to pass the dataset root to LeRobotDataset
+            # LeRobotDataset expects root to point directly to the dataset directory
+            # So we pass the dataset_path itself as the root, and use a simple repo_id
+            # Actually, LeRobotDataset with root expects root to be the parent directory
+            # and repo_id to be the dataset name relative to root
+            # So if dataset is at /path/to/datasets/ur12e/real_libero_spatial/
+            # root should be /path/to/datasets/ and repo_id should be ur12e/real_libero_spatial
+            dataset_root = dataset_path.parent.parent  # Go up two levels to get the datasets root
+            if len(path_parts) >= 2:
+                # repo_id should be relative to dataset_root
+                repo_id_for_lerobot = f"{path_parts[-2]}/{path_parts[-1]}"
+            else:
+                repo_id_for_lerobot = dataset_path.name
+            
+            create_av_aloha_dataset_from_lerobot(
+                episodes=episodes_dict,
+                repo_id=repo_id_for_lerobot,
+                dataset_root=dataset_root,  # Pass dataset root (parent of parent directory) for input
+                remove_keys=config["remove_keys"],
+                image_size=config["image_size"],
+            )
+            
+            print(f"--- Successfully completed conversion for: {dataset_path} ---")
+            return
+            
+        except Exception as e:
+            print(f"Error loading local dataset: {e}")
+            print("Make sure the path contains a valid LeRobot dataset with meta/ directory.")
+            return
+    
+    # It's a repo_id, check if it's in configurations
+    if repo_id_or_path not in DATASET_CONFIGS:
+        print(f"Error: Repository ID '{repo_id_or_path}' not found in configurations.")
+        print("If you're trying to use a local path, make sure it exists and is a valid directory.")
         list_datasets()
         return
 
-    config = DATASET_CONFIGS[repo_id]
+    config = DATASET_CONFIGS[repo_id_or_path]
+    repo_id = repo_id_or_path
 
     episodes_dict = {repo_id: config["episodes"]}
 

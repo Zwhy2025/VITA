@@ -42,12 +42,17 @@ def create_av_aloha_dataset_from_lerobot(
     episodes: dict[str, list[int]] | None = None,
     repo_id: str | None = None,
     root: str | Path | None = None,
+    dataset_root: str | Path | None = None,
     image_size: tuple[int, int] | None = None,
     remove_keys: list[str] = [],
 ):
-    root = Path(root) if root else ROOT / repo_id
+    output_root = Path(root) if root else ROOT / repo_id
     # create lerobot datasets
-    datasets = [LeRobotDataset(repo_id=repo_id, episodes=episodes) for repo_id, episodes in episodes.items()]
+    # If dataset_root is provided, use it for loading datasets; otherwise use default location
+    if dataset_root:
+        datasets = [LeRobotDataset(repo_id=r_id, root=Path(dataset_root) / r_id, episodes=episodes) for r_id, episodes in episodes.items()]
+    else:
+        datasets = [LeRobotDataset(repo_id=r_id, episodes=episodes) for r_id, episodes in episodes.items()]
     # Disable any data keys that are not common across all of the datasets.
     disabled_features = set()
     intersection_features = set(datasets[0].features)
@@ -112,12 +117,12 @@ def create_av_aloha_dataset_from_lerobot(
     tasks_reversed = {v: k for k, v in tasks.items()}
 
     # remove old replay buffer if it exists
-    if root.exists():
-        print(f"Removing existing directory {root}...")
-        shutil.rmtree(root)
+    if output_root.exists():
+        print(f"Removing existing directory {output_root}...")
+        shutil.rmtree(output_root)
 
     # create new replay buffer
-    replay_buffer = ReplayBuffer.create_from_path(zarr_path=root, mode="a")
+    replay_buffer = ReplayBuffer.create_from_path(zarr_path=output_root, mode="a")
     # metadata
     config = {
         "repo_id": dataset.repo_id,
@@ -131,7 +136,7 @@ def create_av_aloha_dataset_from_lerobot(
         "fps": fps,
         "tasks": tasks,
     }
-    config_path = root / "config.json"
+    config_path = output_root / "config.json"
     with open(config_path, "w") as f: 
         json.dump(make_json_serializable(config), f, indent=4)
         
@@ -171,7 +176,7 @@ def create_av_aloha_dataset_from_lerobot(
             replay_buffer.add_episode(batch, compressors='disk')
             print(f"Episode {episode_idx} converted and added to replay buffer.")
             episode_idx += 1
-    print(f"Converted dataset saved to {root}.")
+    print(f"Converted dataset saved to {output_root}.")
 
 def get_dataset_config(
     repo_id: str | None = None,
@@ -251,7 +256,8 @@ class AVAlohaDataset(torch.utils.data.Dataset):
         self.episodes = episodes
 
         # create zarr dataset + lerobot metadata
-        self.replay_buffer = ReplayBuffer.copy_from_path(self.root)
+        #self.replay_buffer = ReplayBuffer.copy_from_path(self.root)
+        self.replay_buffer = ReplayBuffer.create_from_path(self.root, mode='r')
         self.meta = AVAlohaDatasetMeta(repo_id=self.repo_id, root=self.root)
 
         # if no episodes are specified, use all episodes in the replay buffer
