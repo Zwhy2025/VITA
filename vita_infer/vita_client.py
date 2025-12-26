@@ -1,219 +1,106 @@
 """
-VITA 推理客户端
-连接 DataCenter 获取观测数据，发送到 VITA Server 进行推理
+VITA 推理客户端主入口
+支持在线（连接机器人）和离线（从文件读取）两种模式
 """
 import argparse
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 import numpy as np
-import yaml
 
-from protocol import recv_json, send_json
-from datacenter import InteractionDataCenter, RobotTopicConfig
-
-
-def _load_config(path: str) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+from thor.utils.config import load_config, merge_configs
+from thor.network.client import ModelClient
+from thor.io.file import load_data, build_model_obs as build_model_obs_file
 
 
-def _resize_image(rgb: np.ndarray, width: int, height: int) -> np.ndarray:
+def run_offline_mode(args: argparse.Namespace, cfg: Dict[str, Any]) -> None:
+    """运行离线模式"""
+    client_cfg = cfg.get("client", {})
+    mapping = cfg.get("mapping", {})
+    
+    # 处理 offline_dir 参数
+    # 如果指定了场景名，自动匹配 config/data/<scene_name> 目录
+    if args.scene and not args.offline_dir:
+        # 自动匹配场景对应的数据目录
+        offline_dir = Path(__file__).with_name("config") / "data" / args.scene
+    elif args.offline_dir:
+        offline_dir = Path(args.offline_dir)
+        # 如果是相对路径，尝试相对于 config/data 目录
+        if not offline_dir.is_absolute():
+            base_data_dir = Path(__file__).with_name("config") / "data"
+            offline_dir = base_data_dir / offline_dir
+    else:
+        raise ValueError("离线模式需要指定 --scene 或 --offline-dir 参数")
+
+    if not offline_dir.exists():
+        raise FileNotFoundError(f"Offline directory not found: {offline_dir}")
+    
+    if not offline_dir.is_dir():
+        raise NotADirectoryError(f"Path is not a directory: {offline_dir}")
+
+    # 加载离线数据
+    images, qpos = load_data(offline_dir, mapping)
+
+    client = None
     try:
-        import cv2
-    except ImportError as exc:
-        raise RuntimeError("cv2 is required for resize=true") from exc
-    return cv2.resize(rgb, (width, height), interpolation=cv2.INTER_AREA)
-
-
-def _get_camera_image(images: Dict[str, Any], cam_name: str) -> Optional[np.ndarray]:
-    cam = images.get(cam_name)
-    if not cam:
-        return None
-    return cam.get("rgb_img")
-
-
-def _build_agent_pos(
-    qpos: np.ndarray,
-    dc_arms: List[Any],
-    model_arm_order: List[str],
-    model_arm_dof: int,
-    use_gripper: bool,
-    fill_missing_arm: bool,
-) -> np.ndarray:
-    """构建机器人状态向量"""
-    segments: Dict[str, np.ndarray] = {}
-    offset = 0
-    for arm in dc_arms:
-        seg_len = arm.dof + (1 if use_gripper else 0)
-        if offset + seg_len <= len(qpos):
-            segments[arm.name] = qpos[offset : offset + seg_len]
-        else:
-            segments[arm.name] = qpos[offset:]
-        offset += seg_len
-
-    stride = model_arm_dof + (1 if use_gripper else 0)
-    out = []
-    for name in model_arm_order:
-        seg = segments.get(name)
-        if seg is None:
-            if fill_missing_arm:
-                seg = np.zeros(stride, dtype=np.float32)
-            else:
-                raise RuntimeError(f"missing arm in observation: {name}")
-        if len(seg) < stride:
-            seg = np.concatenate([seg, np.zeros(stride - len(seg), dtype=np.float32)])
-        out.append(seg[:stride])
-    return np.concatenate(out, axis=0).astype(np.float32)
-
-
-def _build_model_obs(
-    obs: Dict[str, Any],
-    dc_arms: List[Any],
-    mapping: Dict[str, Any],
-) -> Dict[str, Any]:
-    """
-    根据配置的 model_obs_map，从 datacenter 获取数据并构建模型期望的观察格式
-    """
-    images = obs.get("image", {})
-    image_cfg = mapping.get("image", {})
-    expected_size = image_cfg.get("expected_size", None)
-    expected_w = expected_size[0] if expected_size else None
-    expected_h = expected_size[1] if expected_size else None
-    channel_order = image_cfg.get("channel_order", "rgb")
-    normalize = bool(image_cfg.get("normalize", True))
-    resize = bool(image_cfg.get("resize", False))
-
-    # 获取模型观察映射配置
-    model_obs_map = mapping.get("model_obs_map", {})
-    model_obs = {}
-    
-    # 处理图像类型的观察
-    for model_key, dc_source in model_obs_map.items():
-        if model_key.startswith("observation.images."):
-            # 图像数据：从 datacenter 相机获取
-            rgb = _get_camera_image(images, dc_source) if dc_source else None
-            if rgb is None:
-                if expected_w is None or expected_h is None:
-                    raise RuntimeError(f"expected_size is required when camera {dc_source} image is missing")
-                rgb = np.zeros((expected_h, expected_w, 3), dtype=np.uint8)
-            else:
-                if expected_w is not None and expected_h is not None:
-                    if (rgb.shape[1] != expected_w) or (rgb.shape[0] != expected_h):
-                        if resize:
-                            rgb = _resize_image(rgb, expected_w, expected_h)
-                        else:
-                            raise RuntimeError(
-                                f"camera {dc_source} size {rgb.shape[1]}x{rgb.shape[0]} does not match expected {expected_w}x{expected_h}"
-                            )
-            if channel_order == "bgr":
-                rgb = rgb[:, :, ::-1]
-            rgb = rgb.astype(np.float32)
-            if normalize:
-                rgb = rgb / 255.0
-            chw = np.moveaxis(rgb, -1, 0)
-            
-            # 将点分隔键转换为嵌套结构
-            parts = model_key.split(".")
-            current = model_obs
-            for part in parts[:-1]:
-                if part not in current:
-                    current[part] = {}
-                current = current[part]
-            current[parts[-1]] = chw
+        client = ModelClient(
+            host=client_cfg.get("server_host", "127.0.0.1"),
+            port=int(client_cfg.get("server_port", 8548)),
+            timeout=float(client_cfg.get("action_timeout", 5.0)),
+        )
         
-        elif model_key == "observation.state":
-            # 状态数据：从 qpos 构建
-            qpos = obs.get("qpos", np.array([])).astype(np.float32)
-            state_value = _build_agent_pos(
-                qpos=qpos,
-                dc_arms=dc_arms,
-                model_arm_order=mapping.get("model_arm_order", []),
-                model_arm_dof=int(mapping.get("model_arm_dof", 6)),
-                use_gripper=bool(mapping.get("use_gripper", True)),
-                fill_missing_arm=bool(mapping.get("fill_missing_arm", True)),
-            )
-            # 将 observation.state 转换为嵌套结构
-            if "observation" not in model_obs:
-                model_obs["observation"] = {}
-            model_obs["observation"]["state"] = state_value
+        print("Connected to VITA server")
+        client.call("reset")
+        print("Reset completed")
+
+        # 构建观测
+        model_obs = build_model_obs_file(images, qpos, mapping)
+        print(f"Built observation with keys: {list(model_obs.keys())}")
+        
+        # 调用推理
+        print("\n=== Sending inference request ===")
+        start_time = time.time()
+        resp = client.call("infer", model_obs)
+        action = np.asarray(resp.get("action"))
+        end_time = time.time()
+        print(f"Inference time: {end_time - start_time} seconds")
+        print(f"\n=== Inference Result ===")
+        print(f"Action shape: {action.shape}")
+        print(f"Action:\n{action}")
+        
+        # 如果 action 是序列，打印每一步
+        if len(action.shape) == 2:
+            print(f"\nAction sequence ({action.shape[0]} steps):")
+            for i, act in enumerate(action):
+                print(f"  Step {i+1}: {act}")
+
+    except KeyboardInterrupt:
+        print("\n用户中断")
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        if client:
+            client.close()
+
+
+def run_online_mode(args: argparse.Namespace, cfg: Dict[str, Any]) -> None:
+    """运行在线模式"""
+    # 延迟导入机器人相关模块（仅在在线模式需要）
+    from thor.io.robot import run_inference_loop
+    from thor.robot.center import InteractionDataCenter
+    from thor.robot.config import RobotTopicConfig
     
-    return model_obs
-
-
-def _map_action_to_datacenter(
-    action: np.ndarray,
-    dc_arms: List[Any],
-    mapping: Dict[str, Any],
-) -> np.ndarray:
-    """将模型输出的动作映射到 datacenter 格式"""
-    model_arm_order = mapping.get("model_arm_order", [])
-    model_arm_dof = int(mapping.get("model_arm_dof", 6))
-    use_gripper = bool(mapping.get("use_gripper", True))
-    stride = model_arm_dof + (1 if use_gripper else 0)
-
-    segments: Dict[str, np.ndarray] = {}
-    for idx, name in enumerate(model_arm_order):
-        start = idx * stride
-        end = start + stride
-        segments[name] = action[start:end]
-
-    out: List[float] = []
-    for arm in dc_arms:
-        seg = segments.get(arm.name)
-        target_len = arm.dof + (1 if use_gripper else 0)
-        if seg is None:
-            seg = np.zeros(target_len, dtype=np.float32)
-        if len(seg) < target_len:
-            seg = np.concatenate([seg, np.zeros(target_len - len(seg), dtype=np.float32)])
-        out.extend(seg[: arm.dof].tolist())
-        if use_gripper:
-            gripper = float(seg[arm.dof]) if len(seg) > arm.dof else 0.0
-            out.append(gripper)
-    return np.array(out, dtype=np.float32)
-
-
-class ModelClient:
-    """模型推理客户端"""
-    
-    def __init__(self, host: str, port: int, timeout: float = 5.0):
-        import socket
-
-        self.host = host
-        self.port = port
-        self.timeout = timeout
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.settimeout(self.timeout)
-        self.sock.connect((self.host, self.port))
-
-    def call(self, cmd: str, obs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        send_json(self.sock, {"cmd": cmd, "obs": obs})
-        resp = recv_json(self.sock)
-        if isinstance(resp, dict) and resp.get("error"):
-            raise RuntimeError(resp.get("error"))
-        return resp
-
-    def close(self) -> None:
-        if self.sock:
-            try:
-                self.sock.close()
-            except OSError:
-                pass
-            self.sock = None
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="VITA Inference Client")
-    parser.add_argument("--config", type=str, default=str(Path(__file__).with_name("config.yaml")))
-    args = parser.parse_args()
-
-    cfg = _load_config(args.config)
     client_cfg = cfg.get("client", {})
     mapping = cfg.get("mapping", {})
 
-    # 从配置中提取 datacenter 配置
+    # 从场景配置中提取 datacenter 配置
     datacenter_cfg = cfg.get("datacenter", {})
+    if not datacenter_cfg:
+        raise ValueError("datacenter configuration is required for online mode. Please provide it in scene config.")
+    
     datacenter_config = RobotTopicConfig.from_dict(datacenter_cfg)
     center = InteractionDataCenter(config=datacenter_config)
 
@@ -230,43 +117,7 @@ def main() -> None:
         )
         client.call("reset")
 
-        max_steps = int(client_cfg.get("max_steps", 1000))
-        send_freq = float(client_cfg.get("send_freq", 10))
-        
-        for step_idx in range(max_steps):
-            print(f"\n=== Step {step_idx + 1}/{max_steps} ===")
-            print("请确认是否执行推理")
-            
-            # 获取观测
-            obs = center.get_observation()
-            if not obs:
-                print("未获取到观测数据，跳过...")
-                continue
-
-            model_obs = _build_model_obs(obs, center.config.arms, mapping)
-            
-            # 调用推理
-            resp = client.call("infer", model_obs)
-            action = np.asarray(resp.get("action"))
-            
-            # 确保 action 是 2D 数组 (action_horizon, action_dim)
-            if action.ndim == 1:
-                # 如果是 1D，转换为 2D (1, action_dim)
-                action = action.reshape(1, -1)
-            action_seq = action
-            
-            print(f"Received action sequence: shape={action_seq.shape}")
-            
-            # 执行动作序列
-            for step_idx_in_seq, action_h in enumerate(action_seq):
-                dc_action = _map_action_to_datacenter(action_h, center.config.arms, mapping)
-                
-                print(f"  Step {step_idx_in_seq + 1}/{len(action_seq)}: Publishing action")
-                center.publish_action(dc_action)
-                
-                time.sleep(1.0 / send_freq if send_freq > 0 else 0)
-
-            print(f"step {step_idx + 1}/{max_steps} completed, action_seq_shape={action_seq.shape}")
+        run_inference_loop(center, client, mapping, client_cfg)
 
     except KeyboardInterrupt:
         print("\n用户中断")
@@ -280,6 +131,89 @@ def main() -> None:
         center.stop()
 
 
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="VITA Inference Client (支持在线和离线模式)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+使用示例:
+  # 在线模式（连接机器人）
+  python vita_client.py --scene ur12e_real_libero_spatial
+
+  # 离线模式（从文件读取）
+  python vita_client.py --mode offline --scene ur12e_real_libero_spatial --offline-dir ur12e_real_libero_spatial
+  
+  # 如果指定了 --offline-dir，自动使用离线模式
+  python vita_client.py --offline-dir ur12e_real_libero_spatial
+        """,
+    )
+    parser.add_argument(
+        "--global-config",
+        type=str,
+        default=str(Path(__file__).with_name("config") / "global.yaml"),
+        help="全局配置文件路径",
+    )
+    parser.add_argument(
+        "--scene",
+        type=str,
+        help="场景名称（对应 config/scenes/ 目录下的配置文件）",
+    )
+    parser.add_argument(
+        "--scene-config",
+        type=str,
+        help="场景配置文件路径（如果指定，将覆盖 --scene 参数）",
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["online", "offline"],
+        help="运行模式：online（在线，连接机器人）或 offline（离线，从文件读取）。如果指定了 --offline-dir，此参数可省略",
+    )
+    parser.add_argument(
+        "--offline-dir",
+        type=str,
+        help="离线数据目录路径或子目录名（相对于 config/data 目录）。如果指定了 --scene，会自动匹配 config/data/<scene_name>。如果指定此参数，将自动使用离线模式",
+    )
+    args = parser.parse_args()
+
+    # 确定运行模式
+    if args.offline_dir:
+        mode = "offline"
+    elif args.mode == "offline":
+        mode = "offline"
+        # 离线模式需要场景名或离线目录
+        if not args.scene and not args.offline_dir:
+            parser.error("离线模式需要指定 --scene 或 --offline-dir 参数")
+    elif args.mode:
+        mode = args.mode
+    else:
+        mode = "online"  # 默认在线模式
+
+    # 加载全局配置
+    global_cfg = load_config(args.global_config)
+    
+    # 加载场景配置
+    scene_cfg = None
+    if args.scene_config:
+        scene_cfg = load_config(args.scene_config)
+    elif args.scene:
+        scene_config_path = Path(__file__).with_name("config") / "scenes" / f"{args.scene}.yaml"
+        if scene_config_path.exists():
+            scene_cfg = load_config(str(scene_config_path))
+        else:
+            print(f"Warning: Scene config not found: {scene_config_path}, using default mapping")
+    
+    # 合并配置
+    cfg = merge_configs(global_cfg, scene_cfg)
+
+    print(f"Running in {mode} mode")
+    
+    # 根据模式运行
+    if mode == "offline":
+        run_offline_mode(args, cfg)
+    else:
+        run_online_mode(args, cfg)
+
+
 if __name__ == "__main__":
     main()
-

@@ -1,0 +1,65 @@
+# 场景配置文件：dual_move_thing_to_cup_1
+# 此配置会与全局配置合并
+
+# 机器人硬件配置（仅在线模式使用）
+datacenter:
+  arms:
+    right_arm:
+      base_topic: "/right_arm/manip_t/controller"
+      dof: 7
+
+    left_arm:
+      base_topic: "/left_arm/manip_t/controller"
+      dof: 7
+
+  cameras:
+    wrist_right:
+      base_topic: "/right_arm/manip_t/sensor/camera"
+      streams:
+        rgb: true
+        depth: false
+    wrist_left:
+      base_topic: "/left_arm/manip_t/sensor/camera"
+      streams:
+        rgb: true
+        depth: false
+    head:
+      base_topic: "/embodied/head/manip_t/sensor/camera"
+      streams:
+        rgb: true
+        depth: false
+
+  # 数据缓存配置
+  buffers:
+    action_buffer_size: 200
+    state_buffer_size: 30
+    camera_buffer_size: 30
+
+  # 数据同步配置
+  sync:
+    block_timeout: 100.0
+    check_interval: 0.01
+    timestamp_tolerance: 0.0015
+    sync_target: "image" # 同步目标: qpos 或 image
+
+# 模型输入输出映射配置
+mapping:
+  # 机械臂配置
+  model_arm_order: ["right_arm", "left_arm"]
+  model_arm_dof: 7
+  use_gripper: true
+  fill_missing_arm: false
+
+  # 观测映射：模型期望键名 -> 数据源
+  model_obs_map:
+    observation.images.image: "head" # 主相机图像
+    observation.images.wrist_left_image: "wrist_left" # 左手腕图像
+    observation.images.wrist_right_image: "wrist_right" # 右手腕图像
+    observation.state: "qpos" # 机器人状态
+
+  # 图像预处理配置
+  image:
+    normalize: true
+    channel_order: "rgb"
+    expected_size: [320, 240]
+    resize: true

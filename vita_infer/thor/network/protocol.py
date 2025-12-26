@@ -1,3 +1,7 @@
+"""
+网络通信协议
+JSON 编解码，支持 numpy 数组序列化
+"""
 import base64
 import json
 from typing import Any, Dict
@@ -61,3 +65,7 @@ def send_json(sock, payload: Dict[str, Any]) -> None:
     data = dumps(payload).encode("utf-8")
     sock.sendall(len(data).to_bytes(4, "big"))
     sock.sendall(data)
+
+
+__all__ = ["dumps", "loads", "recv_json", "send_json", "NumpyJSONEncoder"]
+

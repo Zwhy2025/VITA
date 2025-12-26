@@ -13,8 +13,8 @@ from typing import Any, Dict
 
 import yaml
 
-from protocol import recv_json, send_json
-from vita_inference import VitaInference
+from thor.network.protocol import recv_json, send_json
+from thor.engine.inference import VitaInference
 
 # 配置日志
 logging.basicConfig(
@@ -31,6 +31,24 @@ def _load_config(path: str) -> Dict[str, Any]:
         cfg = yaml.safe_load(f)
     logger.info(f"Config loaded successfully")
     return cfg
+
+
+def _extract_all_keys(obj: Any, prefix: str = "") -> list:
+    """递归提取字典或嵌套结构中的所有键"""
+    keys = []
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            current_key = f"{prefix}.{key}" if prefix else key
+            keys.append(current_key)
+            # 如果值是字典或列表，递归提取
+            if isinstance(value, (dict, list)):
+                keys.extend(_extract_all_keys(value, current_key))
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            current_key = f"{prefix}[{i}]" if prefix else f"[{i}]"
+            if isinstance(item, (dict, list)):
+                keys.extend(_extract_all_keys(item, current_key))
+    return keys
 
 
 def _build_model(cfg: Dict[str, Any]):
@@ -167,8 +185,14 @@ class ModelServer:
                         resp = self.service.reset()
                         logger.info(f"[{client_id}] Reset completed")
                     elif cmd == "infer":
+                        
+                        # TODO 调试代码
+                        import json
                         obs_keys = list(obs.keys()) if obs else []
-                        logger.debug(f"[{client_id}] Inference request with obs keys: {obs_keys}")
+                        all_keys = _extract_all_keys(obs)
+                        all_json_keys = json.dumps(all_keys, indent=2)
+                        print(f"[{client_id}] Inference request with obs keys: {all_json_keys}")
+                        
                         resp = self.service.infer(obs)
                         action = resp.get("action")
                         action_shape = action.shape if hasattr(action, "shape") else "unknown"
@@ -202,9 +226,9 @@ def main() -> None:
     logger.info("=" * 60)
     
     parser = argparse.ArgumentParser(description="VITA Inference Server")
-    parser.add_argument("--config", type=str, default=str(Path(__file__).with_name("config.yaml")),
+    parser.add_argument("--config", type=str, default=str(Path(__file__).with_name("config") / "global.yaml"),
                        help="Path to configuration file")
-    parser.add_argument("--log-level", type=str, default="INFO",
+    parser.add_argument("--log-level", type=str, default="DEBUG",
                        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                        help="Set logging level")
     args = parser.parse_args()
@@ -233,4 +257,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

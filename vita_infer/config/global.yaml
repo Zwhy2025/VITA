@@ -1,0 +1,22 @@
+# VITA 全局配置文件
+# 只包含服务器、模型、客户端基础配置
+# 场景相关的配置（如 datacenter、mapping）应在场景配置文件中定义
+
+server:
+  host: "0.0.0.0"
+  port: 8548
+
+model:
+  # VITA 模型 checkpoint 目录
+  # checkpoint_dir: "/root/workspace/VITA/checkpoints/step_0000006000"
+  checkpoint_dir: "/root/workspace/VITA/checkpoints/dual_move_thing_to_cup_1/step_0000018000"
+  mixed_precision: "bf16" # 计算精度: bf16|fp16|fp32
+  device: "cuda:0" # 运行设备: cuda|cpu|cuda:0|cuda:1 (可指定具体GPU)
+
+client:
+  server_host: "127.0.0.1"
+  server_port: 8548
+  send_freq: 30 # 动作发送频率 (Hz)，与训练 fps 保持一致
+  max_steps: 1000
+  action_timeout: 5.0
+  log_dir: "./real_logs"
