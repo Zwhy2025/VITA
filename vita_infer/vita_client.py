@@ -235,10 +235,10 @@ def main() -> None:
         
         for step_idx in range(max_steps):
             print(f"\n=== Step {step_idx + 1}/{max_steps} ===")
-            print("请确认是否执行推理")
-            
+        
+            # input("请确认是否执行推理")
             # 获取观测
-            obs = center.get_observation()
+            obs = center.get_observation() 
             if not obs:
                 print("未获取到观测数据，跳过...")
                 continue
@@ -259,9 +259,14 @@ def main() -> None:
             
             # 执行动作序列
             for step_idx_in_seq, action_h in enumerate(action_seq):
+                
+                # if step_idx_in_seq==0:
+                #     continue
+    
                 dc_action = _map_action_to_datacenter(action_h, center.config.arms, mapping)
                 
-                print(f"  Step {step_idx_in_seq + 1}/{len(action_seq)}: Publishing action")
+                print(f"  Step {step_idx_in_seq + 1}/{len(action_seq)}: Publishing action: {dc_action}")
+                # input("请确认是否发布动作")
                 center.publish_action(dc_action)
                 
                 time.sleep(1.0 / send_freq if send_freq > 0 else 0)

@@ -8,6 +8,7 @@
 """
 
 import logging
+from re import A
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -704,6 +705,13 @@ class InteractionDataCenter:
                 arm_action = action[offset : offset + arm_len]
                 joints = arm_action[: arm.dof].tolist()
                 gripper = float(arm_action[arm.dof])
+                
+
+                threshold = 0.35
+                if gripper > 1- threshold:
+                    gripper = 1.0
+                if gripper < threshold:
+                    gripper = 0
 
                 success = self.arm_node.send_servoj(arm.name, joints, gripper)
                 all_success = all_success and success
