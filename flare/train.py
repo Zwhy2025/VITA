@@ -78,6 +78,7 @@ def create_dataloader(dataset, cfg: DictConfig, is_training=True):
         sampler = None
 
     batch_size = cfg.train.batch_size if is_training else cfg.val.batch_size
+    prefetch_factor = cfg.train.get("prefetch_factor", 2) if is_training else cfg.val.get("prefetch_factor", 2)
 
     dataloader = torch.utils.data.DataLoader(
         dataset,
@@ -86,7 +87,8 @@ def create_dataloader(dataset, cfg: DictConfig, is_training=True):
         shuffle=shuffle,
         sampler=sampler,
         pin_memory=True,
-        drop_last=False,
+        drop_last=True,
+        prefetch_factor=prefetch_factor,
         persistent_workers=True,
     )
     return dataloader

@@ -29,22 +29,43 @@ use_ema: true
 ema_power: 0.75
 
 # original Training settings
-#  128 * 100000  = 12800000 frames
-#  512 * 20000   = 10240000 frames
+#  128  * 100000 = 12800000 frames
+#  512  * 25000  = 12800000 frames
+#  1024 * 12500  = 12800000 frames
 # train:
 #   steps: 100000
 #   batch_size: 128
 #   num_workers: 16
 
+
+# # R2V2 single-arm + 2 RGB cameras @30Hz
 train:
-  steps: 30000  
+  steps: 25000  
   batch_size: 512 
-  num_workers: 4  
+  num_workers: 2
+  prefetch_factor: 3
   log_freq: 1  
   save_freq: 1000
   keep_freq: 20000
   grad_clip_norm: 1.0
   save_best: false
+
+# # R2V2 dual-arm + 3 RGB cameras @30Hz + 110 episode
+# # 显存(A100 80G) : 69/80G 
+# # CPU( INTEL(R) XEON(R) PLATINUM 8558P 32cores): 35% 
+# # 内存(240/256G): 240/256G 
+# # 训练时间: 20h
+# # 数据读取策略: 全量载入内存
+# # 存在IO瓶颈 GPU时序曲线 60%资源占用
+# train:
+#   steps: 30000  
+#   batch_size: 512 
+#   num_workers: 4  
+#   log_freq: 1  
+#   save_freq: 1000
+#   keep_freq: 20000
+#   grad_clip_norm: 1.0
+#   save_best: false
 
 # Validation settings
 val:
