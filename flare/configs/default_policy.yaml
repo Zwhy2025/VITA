@@ -39,7 +39,13 @@ ema_power: 0.75
 #   num_workers: 16
 
 
-# # R2V2 single-arm + 2 RGB cameras @30Hz
+# R2V2 single-arm + 2 RGB cameras @30Hz
+# 显存(A100 80G) : 35/80G 
+# CPU( INTEL(R) XEON(R) PLATINUM 8558P 32cores): 1.5* 100%
+# 内存(240/256G): 240/256G 
+# 训练时间: 13.5h
+# 数据读取策略: 全量载入内存
+# 总结: IO瓶颈较大 平均GPU利用率 35%
 train:
   steps: 25000  
   batch_size: 512 
