@@ -30,6 +30,7 @@ ema_power: 0.75
 
 # original Training settings
 #  128  * 100000 = 12800000 frames
+#  256  * 50000  = 12800000 frames
 #  512  * 25000  = 12800000 frames
 #  1024 * 12500  = 12800000 frames
 # train:
@@ -49,6 +50,24 @@ train:
   keep_freq: 20000
   grad_clip_norm: 1.0
   save_best: false
+
+# # R2V2 dual-arm + 3 RGB cameras @30Hz + 50 episode
+# # 显存(RTX A6000 48G) : 39/48G 
+# # CPU(AMD Ryzen Threadripper PRO 7975WX 32-Cores): 2 * 100% 
+# # 内存(256G): 178G
+# # 训练时间: 12.5h
+# # 数据读取策略: 全量载入内存
+# # 总结: 过程中间歇性IO停滞,但GPU利用率平均达到76%
+# train:
+#   steps: 25000  
+#   batch_size: 512 
+#   num_workers: 4 
+#   prefetch_factor: 3
+#   log_freq: 1  
+#   save_freq: 1000
+#   keep_freq: 20000
+#   grad_clip_norm: 1.0
+#   save_best: false
 
 # # R2V2 dual-arm + 3 RGB cameras @30Hz + 110 episode
 # # 显存(A100 80G) : 69/80G 
