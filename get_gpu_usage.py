@@ -202,7 +202,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "-t", "--total-seconds",
         type=float,
-        default=300,
+        default=480,
         help="总监控时长（秒），默认30"
     )
     parser.add_argument(

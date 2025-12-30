@@ -64,7 +64,7 @@ ema_power: 0.75
 # 数据读取策略: 全量载入内存
 # 总结: 过程中间歇性IO停滞,但GPU利用率平均达到76%
 train:
-  steps: 12500
+  steps: 30000
   batch_size: 512
   num_workers: 8
   prefetch_factor: 2
