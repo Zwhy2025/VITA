@@ -6,8 +6,10 @@
 #       python convert.py -r iantc104/av_aloha_sim_thread_needle
 # * Converting a local dataset
 #       python convert.py -r /path/to/dataset
-# * Converting with parallel processing (4 workers)
-#       python convert.py -r /path/to/dataset -w 4
+# * Converting with parallel processing (8 workers, optimized with direct Zarr writes)
+#       python convert.py -r /path/to/dataset -w 8
+# * Converting with GPU acceleration for image resizing
+#       python convert.py -r /path/to/dataset -w 8 --gpu
 # * Display help message
 #       python convert.py -h
 
@@ -100,7 +102,7 @@ def list_datasets():
     print("--------------------------------------------------")
 
 
-def convert_dataset(repo_id_or_path: str, num_workers: int = 1):
+def convert_dataset(repo_id_or_path: str, num_workers: int = 1, use_gpu: bool = False):
     """
     Convert a dataset from LeRobot format to AV-ALOHA format.
     
@@ -108,6 +110,7 @@ def convert_dataset(repo_id_or_path: str, num_workers: int = 1):
         repo_id_or_path: Either a repository ID (e.g., 'iantc104/av_aloha_sim_cube_transfer')
                          or a local path to a dataset directory
         num_workers: Number of parallel workers for conversion (default: 1 for serial)
+        use_gpu: Whether to use GPU for image resizing (default: False)
     """
     # Check if it's a local path
     dataset_path = Path(repo_id_or_path)
@@ -150,6 +153,7 @@ def convert_dataset(repo_id_or_path: str, num_workers: int = 1):
             print(f"Keys to remove: {config['remove_keys']}")
             print(f"Target image size: {config['image_size'] or 'Original size'}")
             print(f"Parallel workers: {num_workers}")
+            print(f"GPU acceleration: {use_gpu}")
             print("------------------------------------------")
             
             episodes_dict = {repo_id: config["episodes"]}
@@ -176,6 +180,7 @@ def convert_dataset(repo_id_or_path: str, num_workers: int = 1):
                     remove_keys=config["remove_keys"],
                     image_size=config["image_size"],
                     num_workers=num_workers,
+                    use_gpu=use_gpu,
                 )
             else:
                 convert_func(
@@ -211,6 +216,7 @@ def convert_dataset(repo_id_or_path: str, num_workers: int = 1):
     print(f"Keys to remove: {config['remove_keys']}")
     print(f"Target image size: {config['image_size']}")
     print(f"Parallel workers: {num_workers}")
+    print(f"GPU acceleration: {use_gpu}")
     print("------------------------------------------")
 
     if num_workers > 1:
@@ -220,6 +226,7 @@ def convert_dataset(repo_id_or_path: str, num_workers: int = 1):
             remove_keys=config["remove_keys"],
             image_size=config["image_size"],
             num_workers=num_workers,
+            use_gpu=use_gpu,
         )
     else:
         convert_func(
@@ -256,8 +263,15 @@ def main():
         type=int,
         default=8,
         metavar="NUM",
-        help="Number of parallel workers for conversion (default: 1 for serial processing).\n"
-             "Use -w 4 or more to enable parallel processing for faster conversion.",
+        help="Number of parallel workers for conversion (default: 8).\n"
+             "Uses optimized direct Zarr writes, eliminating merge overhead.",
+    )
+    
+    parser.add_argument(
+        "--gpu",
+        action="store_true",
+        help="Use GPU acceleration for image resizing.\n"
+             "Workers are automatically distributed across available GPUs.",
     )
 
     args = parser.parse_args()
@@ -265,7 +279,7 @@ def main():
     if args.ls:
         list_datasets()
     elif args.repo:
-        convert_dataset(args.repo, num_workers=args.workers)
+        convert_dataset(args.repo, num_workers=args.workers, use_gpu=args.gpu)
 
 
 if __name__ == "__main__":

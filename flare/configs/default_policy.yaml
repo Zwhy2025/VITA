@@ -38,6 +38,26 @@ ema_power: 0.75
 #   batch_size: 128
 #   num_workers: 16
 
+
+
+# R2V2 dual-arm + 3 RGB cameras @30Hz + 202 episode
+# 显存(RTX A100 80G) : 69/80G
+# CPU( INTEL(R) XEON(R) PLATINUM 8558P 32cores): 1.5* 100%
+# 内存(256G): 178G
+# 训练时间: 20h
+# 数据读取策略: 全量载入内存
+# 总结: 存在IO瓶颈 GPU时序曲线 60%资源占用
+train:
+  steps: 25000
+  batch_size: 512
+  num_workers: 5
+  prefetch_factor: 3
+  log_freq: 1
+  save_freq: 1000
+  keep_freq: 20000
+  grad_clip_norm: 1.0
+  save_best: false
+
 # # R2V2 single-arm + 2 RGB cameras @30Hz
 # # 显存(A100 80G) : 35/80G
 # # CPU( INTEL(R) XEON(R) PLATINUM 8558P 32cores): 1.5* 100%
@@ -56,23 +76,23 @@ ema_power: 0.75
 #   grad_clip_norm: 1.0
 #   save_best: false
 
-# R2V2 dual-arm + 3 RGB cameras @30Hz + 50 episode
-# 显存(RTX A6000 48G) : 39/48G
-# CPU(AMD Ryzen Threadripper PRO 7975WX 32-Cores): 2 * 100%
-# 内存(256G): 178G
-# 训练时间: 12.5h
-# 数据读取策略: 全量载入内存
-# 总结: 过程中间歇性IO停滞,但GPU利用率平均达到76%
-train:
-  steps: 30000
-  batch_size: 512
-  num_workers: 8
-  prefetch_factor: 2
-  log_freq: 1
-  save_freq: 1000
-  keep_freq: 20000
-  grad_clip_norm: 1.0
-  save_best: false
+# # R2V2 dual-arm + 3 RGB cameras @30Hz + 50 episode
+# # 显存(RTX A6000 48G) : 39/48G
+# # CPU(AMD Ryzen Threadripper PRO 7975WX 32-Cores): 2 * 100%
+# # 内存(256G): 178G
+# # 训练时间: 12.5h
+# # 数据读取策略: 全量载入内存
+# # 总结: 过程中间歇性IO停滞,但GPU利用率平均达到76%
+# train:
+#   steps: 30000
+#   batch_size: 512
+#   num_workers: 8
+#   prefetch_factor: 2
+#   log_freq: 1
+#   save_freq: 1000
+#   keep_freq: 20000
+#   grad_clip_norm: 1.0
+#   save_best: false
 
 # # R2V2 dual-arm + 3 RGB cameras @30Hz + 110 episode
 # # 显存(A100 80G) : 69/80G

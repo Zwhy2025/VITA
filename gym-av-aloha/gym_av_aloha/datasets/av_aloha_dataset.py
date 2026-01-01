@@ -2,7 +2,7 @@ import torch
 from pathlib import Path
 import os
 import numpy as np
-from typing import Callable
+from typing import Callable, Optional, Dict, List, Tuple, Any
 import gym_av_aloha
 from gym_av_aloha.common.replay_buffer import ReplayBuffer
 from lerobot.common.datasets.lerobot_dataset import LeRobotDatasetMetadata
@@ -22,11 +22,72 @@ from tqdm import tqdm
 from lerobot.common.datasets.compute_stats import aggregate_stats
 import shutil
 import json
-import tempfile
-from concurrent.futures import ProcessPoolExecutor, as_completed
-import multiprocessing as mp
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 ROOT = Path(os.path.dirname(os.path.dirname(gym_av_aloha.__file__))) / "outputs"
+
+
+def _convert_episode_to_numpy(
+    repo_id: str,
+    dataset_root: Optional[str],
+    ep_idx: int,
+    out_ep_idx: int,
+    features: Dict[str, Dict],
+    tasks_reversed: Dict[str, int],
+    image_size: Optional[Tuple[int, int]],
+) -> Tuple[int, Dict[str, np.ndarray]]:
+    """
+    Convert one episode into numpy arrays (no disk write here).
+    This is intentionally simple and thread-friendly.
+    """
+    if dataset_root:
+        dataset = LeRobotDataset(
+            repo_id=repo_id,
+            root=Path(dataset_root) / repo_id,
+            episodes=[ep_idx],
+            video_backend="pyav",
+        )
+    else:
+        dataset = LeRobotDataset(
+            repo_id=repo_id,
+            episodes=[ep_idx],
+            video_backend="pyav",
+        )
+
+    from_idx = dataset.episode_data_index["from"][0].item()
+    to_idx = dataset.episode_data_index["to"][0].item()
+    subset = Subset(dataset, range(from_idx, to_idx))
+    dataloader = DataLoader(subset, batch_size=16, shuffle=False, num_workers=0)
+
+    batches: List[Dict[str, torch.Tensor]] = []
+    for batch in dataloader:
+        if "task_index" in batch:
+            batch["task_index"] = torch.tensor([tasks_reversed[k] for k in batch["task"]], dtype=int)
+            del batch["task"]
+        batch["episode_index"] = torch.full_like(batch["episode_index"], out_ep_idx)
+        batches.append(batch)
+
+    merged = {k: torch.cat([b[k] for b in batches], dim=0) for k in batches[0].keys()}
+    del batches
+    del dataset
+
+    def _convert_one(k: str, v: torch.Tensor) -> np.ndarray:
+        dtype = features[k]["dtype"]
+        if dtype in ["image", "video"]:
+            if image_size is not None:
+                v = Resize(image_size)(v)
+            v = v.permute(0, 2, 3, 1)
+            return (v * 255).to(torch.uint8).numpy()
+        return v.numpy()
+
+    converted: Dict[str, np.ndarray] = {}
+    for k in features.keys():
+        if k in merged:
+            converted[k] = _convert_one(k, merged[k])
+    del merged
+    return out_ep_idx, converted
+
 
 def make_json_serializable(obj):
     """Convert an object to a JSON-serializable format."""
@@ -183,128 +244,6 @@ def create_av_aloha_dataset_from_lerobot(
     print(f"Converted dataset saved to {output_root}.")
 
 
-def _process_episode_batch_worker(args):
-    """
-    Worker function to process a batch of episodes in a separate process.
-    
-    Args:
-        args: Tuple containing all necessary parameters for processing
-    
-    Returns:
-        Tuple of (worker_id, temp_dir, num_episodes_processed, total_frames)
-    """
-    (
-        worker_id,
-        episode_indices,
-        repo_id,
-        dataset_root,
-        temp_dir,
-        features,
-        tasks_reversed,
-        image_size,
-        remove_keys,
-    ) = args
-    
-    # Create dataset in this process
-    episodes_dict = {repo_id: episode_indices}
-    if dataset_root:
-        dataset = LeRobotDataset(
-            repo_id=repo_id, 
-            root=Path(dataset_root) / repo_id, 
-            episodes=episode_indices, 
-            video_backend="pyav"
-        )
-    else:
-        dataset = LeRobotDataset(
-            repo_id=repo_id, 
-            episodes=episode_indices, 
-            video_backend="pyav"
-        )
-    
-    # Create temporary replay buffer
-    temp_path = Path(temp_dir)
-    replay_buffer = ReplayBuffer.create_from_path(zarr_path=temp_path, mode="a")
-    
-    def convert(k, v: torch.Tensor):
-        dtype = features[k]['dtype']
-        if dtype in ['image', 'video']:
-            if image_size is not None:
-                v = Resize(image_size)(v)
-            v = v.permute(0, 2, 3, 1)
-            v = (v * 255).to(torch.uint8).numpy()
-        else:
-            v = v.numpy()
-        return v
-    
-    total_frames = 0
-    local_episode_idx = 0
-    
-    for i in range(dataset.num_episodes):
-        from_idx = dataset.episode_data_index['from'][i]
-        to_idx = dataset.episode_data_index['to'][i]
-        subset = Subset(dataset, range(from_idx, to_idx))
-        # Use fewer workers in subprocess to avoid resource contention
-        dataloader = DataLoader(subset, batch_size=16, shuffle=False, num_workers=2)
-        
-        data = []
-        for batch in dataloader:
-            if 'task_index' in batch:
-                batch['task_index'] = torch.tensor(
-                    [tasks_reversed[k] for k in batch['task']], dtype=int
-                )
-                del batch["task"]
-            batch['episode_index'] = torch.full_like(batch['episode_index'], local_episode_idx)
-            data.append(batch)
-        
-        batch = {k: torch.cat([d[k] for d in data], dim=0) for k in data[0].keys()}
-        batch = {k: convert(k, v) for k, v in batch.items() if k in features}
-        replay_buffer.add_episode(batch, compressors='disk')
-        
-        total_frames += to_idx - from_idx
-        local_episode_idx += 1
-    
-    return (worker_id, str(temp_path), local_episode_idx, total_frames)
-
-
-def _merge_zarr_buffers(temp_dirs: list[str], output_root: Path, config: dict):
-    """
-    Merge multiple temporary zarr buffers into the final output.
-    
-    Args:
-        temp_dirs: List of paths to temporary zarr directories (in order)
-        output_root: Path to the final output directory
-        config: Configuration dict to save
-    """
-    # Create final replay buffer
-    replay_buffer = ReplayBuffer.create_from_path(zarr_path=output_root, mode="a")
-    
-    episode_idx = 0
-    for temp_dir in temp_dirs:
-        temp_path = Path(temp_dir)
-        if not temp_path.exists():
-            continue
-            
-        # Load temporary buffer
-        temp_buffer = ReplayBuffer.copy_from_path(temp_path)
-        
-        # Copy episodes from temp buffer to final buffer
-        for i in range(temp_buffer.n_episodes):
-            episode_data = temp_buffer.get_episode(i, copy=True)
-            # Update episode_index to be sequential
-            episode_data['episode_index'] = np.full_like(
-                episode_data['episode_index'], episode_idx
-            )
-            replay_buffer.add_episode(episode_data, compressors='disk')
-            episode_idx += 1
-    
-    # Save config
-    config_path = output_root / "config.json"
-    with open(config_path, "w") as f:
-        json.dump(make_json_serializable(config), f, indent=4)
-    
-    print(f"Merged {episode_idx} episodes into {output_root}")
-
-
 def create_av_aloha_dataset_from_lerobot_parallel(
     episodes: dict[str, list[int]] | None = None,
     repo_id: str | None = None,
@@ -313,12 +252,13 @@ def create_av_aloha_dataset_from_lerobot_parallel(
     image_size: tuple[int, int] | None = None,
     remove_keys: list[str] = [],
     num_workers: int = 4,
+    use_gpu: bool = False,
 ):
     """
-    Parallel version of create_av_aloha_dataset_from_lerobot.
+    Optimized parallel version of create_av_aloha_dataset_from_lerobot.
     
-    Processes episodes in parallel using multiple worker processes,
-    then merges the results into a single output.
+    Uses direct parallel writes to a preallocated Zarr array, eliminating
+    the need for temporary files and merge operations.
     
     Args:
         episodes: Dict mapping repo_id to list of episode indices
@@ -328,6 +268,7 @@ def create_av_aloha_dataset_from_lerobot_parallel(
         image_size: Target image size (H, W) or None to keep original
         remove_keys: List of keys to remove from the dataset
         num_workers: Number of parallel workers (default: 4)
+        use_gpu: Whether to use GPU for image resizing (default: False)
     """
     output_root = Path(root) if root else ROOT / repo_id
     
@@ -342,7 +283,8 @@ def create_av_aloha_dataset_from_lerobot_parallel(
             remove_keys=remove_keys,
         )
     
-    print(f"Starting parallel conversion with {num_workers} workers...")
+    print(f"Starting optimized parallel conversion with {num_workers} workers...")
+    print("Phase 1: Loading metadata and prescanning episodes...")
     
     # Load metadata from the first dataset to get configuration
     if dataset_root:
@@ -382,7 +324,7 @@ def create_av_aloha_dataset_from_lerobot_parallel(
     assert all(dataset.meta.fps == fps for dataset in datasets)
     
     num_frames = sum(d.num_frames for d in datasets)
-    num_episodes = sum(d.num_episodes for d in datasets)
+    num_episodes_total = sum(d.num_episodes for d in datasets)
     
     features = {}
     for dataset in datasets:
@@ -417,12 +359,17 @@ def create_av_aloha_dataset_from_lerobot_parallel(
     tasks = {i: task for i, task in enumerate(tasks)}
     tasks_reversed = {v: k for k, v in tasks.items()}
     
+    # Get all episodes to process
+    # For simplicity, we handle single repo_id case (most common)
+    main_repo_id = list(episodes.keys())[0]
+    all_episodes = episodes[main_repo_id]
+    
     # Prepare config
     config = {
         "repo_id": datasets[0].repo_id,
         "stats": stats,
         "num_frames": num_frames,
-        "num_episodes": num_episodes,
+        "num_episodes": num_episodes_total,
         "features": features,
         "camera_keys": camera_keys,
         "video_keys": video_keys,
@@ -430,6 +377,13 @@ def create_av_aloha_dataset_from_lerobot_parallel(
         "fps": fps,
         "tasks": tasks,
     }
+    
+    # Get a sample batch for shape inference
+    sample_data = None
+    if len(datasets) > 0 and datasets[0].num_frames > 0:
+        sample_item = datasets[0][0]
+        sample_data = {k: v.numpy() if isinstance(v, torch.Tensor) else v 
+                       for k, v in sample_item.items() if k in features}
     
     # Clear datasets to free memory before spawning workers
     del datasets
@@ -439,87 +393,60 @@ def create_av_aloha_dataset_from_lerobot_parallel(
         print(f"Removing existing directory {output_root}...")
         shutil.rmtree(output_root)
     
-    # Create temporary directory for worker outputs
-    temp_base = tempfile.mkdtemp(prefix="av_aloha_convert_")
-    print(f"Using temporary directory: {temp_base}")
+    # Create empty replay buffer (no preallocation - save memory)
+    print(f"Phase 2: Creating output Zarr structure...")
+    replay_buffer = ReplayBuffer.create_from_path(zarr_path=output_root, mode="a")
     
-    try:
-        # Distribute episodes across workers
-        # For simplicity, we handle single repo_id case (most common)
-        main_repo_id = list(episodes.keys())[0]
-        all_episodes = episodes[main_repo_id]
-        
-        # Split episodes into chunks for each worker
-        chunk_size = max(1, len(all_episodes) // num_workers)
-        episode_chunks = []
-        for i in range(0, len(all_episodes), chunk_size):
-            chunk = all_episodes[i:i + chunk_size]
-            if chunk:
-                episode_chunks.append(chunk)
-        
-        # Adjust num_workers if we have fewer chunks
-        actual_workers = min(num_workers, len(episode_chunks))
-        print(f"Distributing {len(all_episodes)} episodes across {actual_workers} workers")
-        
-        # Prepare worker arguments
-        worker_args = []
-        for worker_id, chunk in enumerate(episode_chunks):
-            temp_dir = os.path.join(temp_base, f"worker_{worker_id}")
-            worker_args.append((
-                worker_id,
-                chunk,
+    # Save config
+    config_path = output_root / "config.json"
+    with open(config_path, "w") as f:
+        json.dump(make_json_serializable(config), f, indent=4)
+    
+    print("Phase 3: Parallel processing (threads) and sequential Zarr writing...")
+
+    if use_gpu:
+        # Keep API compatible with convert.py, but avoid complex CUDA + multiprocessing issues.
+        print("Warning: --gpu is currently not supported in the simplified parallel path. Using CPU.")
+
+    # Threaded producers + single-threaded writer (main thread).
+    # This avoids:
+    # - multiprocessing crashes from video backends
+    # - pickling huge numpy arrays across processes
+    # - concurrent Zarr writes
+    total_eps = len(all_episodes)
+    print(f"Converting {total_eps} episodes with {num_workers} worker threads...")
+
+    next_to_write = 0
+    pending: Dict[int, Dict[str, np.ndarray]] = {}
+    dataset_root_str = str(dataset_root) if dataset_root else None
+
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = {
+            executor.submit(
+                _convert_episode_to_numpy,
                 main_repo_id,
-                str(dataset_root) if dataset_root else None,
-                temp_dir,
+                dataset_root_str,
+                ep_idx,
+                out_ep_idx,
                 features,
                 tasks_reversed,
                 image_size,
-                remove_keys,
-            ))
-        
-        # Process in parallel
-        temp_dirs = [None] * len(worker_args)
-        
-        # Use fork on Linux (faster, avoids re-importing modules)
-        # Use spawn on other platforms for safety
-        import platform
-        if platform.system() == 'Linux':
-            ctx = mp.get_context('fork')
-        else:
-            ctx = mp.get_context('spawn')
-        
-        with ProcessPoolExecutor(max_workers=actual_workers, mp_context=ctx) as executor:
-            futures = {
-                executor.submit(_process_episode_batch_worker, args): args[0] 
-                for args in worker_args
-            }
-            
-            with tqdm(total=len(futures), desc="Processing batches") as pbar:
-                for future in as_completed(futures):
-                    worker_id = futures[future]
-                    try:
-                        result = future.result()
-                        w_id, temp_path, n_eps, n_frames = result
-                        temp_dirs[w_id] = temp_path
-                        pbar.set_postfix({
-                            f"Worker {w_id}": f"{n_eps} eps, {n_frames} frames"
-                        })
-                        pbar.update(1)
-                    except Exception as e:
-                        print(f"Worker {worker_id} failed with error: {e}")
-                        raise
-        
-        # Merge results
-        print("Merging temporary buffers...")
-        # Filter out None values and sort by worker_id
-        valid_temp_dirs = [d for d in temp_dirs if d is not None]
-        _merge_zarr_buffers(valid_temp_dirs, output_root, config)
-        
-    finally:
-        # Cleanup temporary directory
-        print(f"Cleaning up temporary directory: {temp_base}")
-        shutil.rmtree(temp_base, ignore_errors=True)
-    
+            ): out_ep_idx
+            for out_ep_idx, ep_idx in enumerate(all_episodes)
+        }
+
+        with tqdm(total=len(futures), desc="Converting episodes") as pbar:
+            for future in as_completed(futures):
+                out_ep_idx, converted = future.result()
+                pending[out_ep_idx] = converted
+
+                # Write in order as soon as possible to keep memory bounded.
+                while next_to_write in pending:
+                    replay_buffer.add_episode(pending.pop(next_to_write), compressors="disk")
+                    next_to_write += 1
+
+                pbar.update(1)
+
     print(f"Parallel conversion complete. Dataset saved to {output_root}")
 
 

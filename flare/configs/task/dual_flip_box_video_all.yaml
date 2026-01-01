@@ -4,9 +4,9 @@ resize_shape: [240, 320]
 crop_shape: [224, 308]
 
 task:
-  name: dual_flip_box_video
-  dataset_repo_id: r2v2/dual_flip_box_video # 与转换时生成的 repo_id 一致
-  dataset_root: ${oc.env:FLARE_DATASETS_DIR}/r2v2/dual_flip_box_video
+  name: dual_flip_box_video_all
+  dataset_repo_id: r2v2/dual_flip_box_video_all # 与转换时生成的 repo_id 一致
+  dataset_root: ${oc.env:FLARE_DATASETS_DIR}/r2v2/dual_flip_box_video_all
   dataset_episodes: null # null 表示使用所有 episodes
 
   # 图像归一化统计（可选，如果不设置会使用数据集统计）
