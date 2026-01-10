@@ -44,6 +44,8 @@ class RobotTopicConfig:
     check_interval: float = 0.01
     timestamp_tolerance: float = 0.03
     sync_target: str = "image"  # 同步目标，可选 "qpos" 或 "image"
+    # 动作安全配置
+    action_delta_threshold: float = 0.1  # 相邻帧动作变化阈值，超过则报错终止
 
     @property
     def camera_topics(self) -> Dict[str, str]:
@@ -125,6 +127,10 @@ class RobotTopicConfig:
         timestamp_tolerance = sync.get("timestamp_tolerance", 0.03)
         sync_target = sync.get("sync_target", "image")
 
+        # 解析安全配置
+        safety: dict = data.get("safety", {})
+        action_delta_threshold = safety.get("action_delta_threshold", 0.1)
+
         return cls(
             arms=arms,
             cameras=cameras,
@@ -135,6 +141,7 @@ class RobotTopicConfig:
             check_interval=check_interval,
             timestamp_tolerance=timestamp_tolerance,
             sync_target=sync_target,
+            action_delta_threshold=action_delta_threshold,
         )
 
     def validate(self) -> List[str]:

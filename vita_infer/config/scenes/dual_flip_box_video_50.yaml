@@ -42,9 +42,8 @@ datacenter:
     timestamp_tolerance: 0.0015
     sync_target: "image" # 同步目标: qpos 或 image
 
-  # 动作安全配置
   safety:
-    action_delta_threshold: 0.1  # 相邻帧动作变化阈值，超过则报错终止程序
+    action_delta_threshold: 0.15 # 相邻帧动作变化阈值，超过则报错终止程序
 
 # 模型输入输出映射配置
 mapping:

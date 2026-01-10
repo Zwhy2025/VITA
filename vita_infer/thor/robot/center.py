@@ -3,6 +3,7 @@
 组合关节/相机节点，提供统一的观测和动作接口
 """
 import logging
+import sys
 import threading
 import time
 from pathlib import Path
@@ -13,6 +14,11 @@ import yaml
 
 from thor.robot.config import RobotTopicConfig
 from thor.robot.nodes import MultiArmJointNode, MultiCameraNode
+
+
+class ActionSafetyError(Exception):
+    """动作安全检测异常：当检测到动作值异常时抛出"""
+    pass
 
 # 配置日志
 logging.basicConfig(
@@ -80,7 +86,12 @@ class InteractionDataCenter:
         self.check_interval: float = self.config.check_interval
         self.timestamp_tolerance: float = self.config.timestamp_tolerance
 
+        # 动作安全检测
+        self.last_action: Optional[np.ndarray] = None
+        self.action_delta_threshold: float = self.config.action_delta_threshold
+
         self.logger.info(f"交互中心初始化完成，启用机械臂: {list(self.config.arm_topics.keys())}, 启用相机: {list(self.config.camera_topics.keys())}")
+        self.logger.info(f"动作安全阈值: action_delta_threshold={self.action_delta_threshold}")
 
     def get_camera_names(self) -> Dict[str, str]:
         """获取启用的相机名称列表"""
@@ -222,6 +233,90 @@ class InteractionDataCenter:
 
         return self.get_observation()
 
+    def _get_joint_indices(self) -> list:
+        """
+        获取所有关节的索引（不含夹爪）
+
+        Returns:
+            关节索引列表
+        """
+        joint_indices = []
+        offset = 0
+        for arm in self.config.arms:
+            # 添加该机械臂的关节索引（不含夹爪）
+            for i in range(arm.dof):
+                joint_indices.append(offset + i)
+            # 跳过夹爪位置
+            offset += arm.dof + 1
+        return joint_indices
+
+    def _get_current_state_as_action(self) -> Optional[np.ndarray]:
+        """
+        获取当前机械臂状态，组装成与 action 格式相同的数组
+        格式：[臂1关节+夹爪, 臂2关节+夹爪, ...]
+
+        Returns:
+            当前状态数组，获取失败返回 None
+        """
+        state_list = []
+        for arm in self.config.arms:
+            payload = self.arm_node.get_joint_state(arm.name)
+            if payload is None or payload.get("data") is None:
+                self.logger.warning(f"无法获取机械臂 '{arm.name}' 的当前状态")
+                return None
+            joints, gripper = payload["data"]
+            state_list.extend(joints)
+            state_list.append(gripper)
+        return np.array(state_list, dtype=np.float32)
+
+    def _check_action_safety(self, action: np.ndarray) -> None:
+        """
+        检查动作安全性：与上一帧动作对比，超过阈值则报错终止
+        注意：只检测关节，不检测夹爪
+
+        Args:
+            action: 当前动作数组
+
+        Raises:
+            ActionSafetyError: 动作变化超过阈值
+        """
+        if self.last_action is None:
+            # 第一帧，获取当前机械臂状态作为基准
+            current_state = self._get_current_state_as_action()
+            if current_state is not None:
+                self.last_action = current_state
+                self.logger.info(f"[动作安全检测] 初始化基准状态: [{' '.join([f'{v:.6f}' for v in self.last_action])}]")
+            else:
+                error_msg = "[动作安全检测] 无法获取当前机械臂状态，初始化失败！"
+                self.logger.error(error_msg)
+                raise ActionSafetyError(error_msg)
+
+        if len(action) != len(self.last_action):
+            self.logger.warning(f"动作维度不一致: 当前={len(action)}, 上一帧={len(self.last_action)}")
+            return
+
+        # 获取关节索引（不含夹爪）
+        joint_indices = self._get_joint_indices()
+
+        # 只计算关节的变化量（不含夹爪）
+        delta = np.abs(action - self.last_action)
+        joint_delta = delta[joint_indices]
+        max_delta = np.max(joint_delta)
+        max_delta_local_idx = np.argmax(joint_delta)
+        max_delta_idx = joint_indices[max_delta_local_idx]  # 映射回原始索引
+
+        if max_delta > self.action_delta_threshold:
+            error_msg = (
+                f"[动作安全检测] 关节动作变化超过阈值！\n"
+                f"  阈值: {self.action_delta_threshold}\n"
+                f"  最大变化: {max_delta:.6f} (关节索引: {max_delta_idx})\n"
+                f"  上一帧动作: [{' '.join([f'{v:.6f}' for v in self.last_action])}]\n"
+                f"  当前动作:   [{' '.join([f'{v:.6f}' for v in action])}]\n"
+                f"  关节变化量: [{' '.join([f'{delta[i]:.6f}' for i in joint_indices])}]"
+            )
+            self.logger.error(error_msg)
+            raise ActionSafetyError(error_msg)
+
     def publish_action(self, action: np.ndarray) -> bool:
         """
         发布动作指令(框架适配)
@@ -229,10 +324,19 @@ class InteractionDataCenter:
         Args:
             action: 动作数组，按配置中机械臂顺序排列
                     格式：[臂1关节+夹爪, 臂2关节+夹爪, ...]
+
+        Raises:
+            ActionSafetyError: 动作变化超过安全阈值时抛出，程序应终止
         """
         if not self.is_running:
             self.logger.error("交互中心未启动，无法发布动作")
             return False
+
+        # 转换为 numpy 数组（如果不是的话）
+        action = np.asarray(action, dtype=np.float32)
+
+        # 动作安全检测（超过阈值会抛出 ActionSafetyError）
+        self._check_action_safety(action)
 
         try:
             offset = 0  # 用于判定当前处理到哪个机械臂
@@ -254,8 +358,13 @@ class InteractionDataCenter:
 
                 offset += arm_len
 
+            # 动作发布成功后，更新 last_action
+            self.last_action = action.copy()
             return all_success
 
+        except ActionSafetyError:
+            # 安全检测异常直接向上抛出
+            raise
         except Exception as e:
             self.logger.error(f"动作发布失败：{e}")
             return False
@@ -293,5 +402,5 @@ if __name__ == "__main__":
     test_spin(config_path=args.config)
 
 
-__all__ = ["InteractionDataCenter", "test_spin"]
+__all__ = ["InteractionDataCenter", "ActionSafetyError", "test_spin"]
 

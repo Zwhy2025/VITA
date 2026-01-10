@@ -2,6 +2,7 @@
 机器人数据源
 连接机器人获取观测数据
 """
+import sys
 import time
 from typing import Any, Dict, List
 
@@ -9,7 +10,7 @@ import numpy as np
 
 from thor.io.obs_builder import get_image_config, process_image_obs
 from thor.utils.config import merge_nested_dict
-from thor.robot.center import InteractionDataCenter
+from thor.robot.center import InteractionDataCenter, ActionSafetyError
 
 
 def get_camera_image(images: Dict[str, Any], cam_name: str) -> Any:
@@ -142,44 +143,61 @@ def run_inference_loop(
     max_steps = int(client_cfg.get("max_steps", 1000))
     send_freq = float(client_cfg.get("send_freq", 10))
     
-    for step_idx in range(max_steps):
-        print(f"\n=== Step {step_idx + 1}/{max_steps} ===")
-        input("请确认是否执行推理")
-        
-        # 获取观测
-        obs = center.get_observation()
-        if not obs:
-            print("未获取到观测数据，跳过...")
-            continue
+    try:
+        for step_idx in range(max_steps):
 
-        model_obs = build_model_obs(obs, center.config.arms, mapping)
-        
-        # 调用推理
-        resp = client.call("infer", model_obs)
-        action = np.asarray(resp.get("action"))
-        
-        # 确保 action 是 2D 数组 (action_horizon, action_dim)
-        if action.ndim == 1:
-            # 如果是 1D，转换为 2D (1, action_dim)
-            action = action.reshape(1, -1)
-        action_seq = action
-        
-        print(f"Received action sequence: shape={action_seq.shape}")
-        
-        # 执行动作序列
-        for step_idx_in_seq, action_h in enumerate(action_seq):
-            dc_action = map_action_to_datacenter(action_h, center.config.arms, mapping)
-            
-            print(f"  Step {step_idx_in_seq + 1}/{len(action_seq)}: Publishing action")
-            input("请确认是否执行推理")
-            center.publish_action(dc_action)
-            
-            time.sleep(1.0 / send_freq if send_freq > 0 else 0)
+            print("等待运动到位！")
+            time.sleep(0.4)
 
-        print(f"step {step_idx + 1}/{max_steps} completed, action_seq_shape={action_seq.shape}")
+            print(f"\n=== Step {step_idx + 1}/{max_steps} ===")
+            #input("请确认是否执行推理")
+            
+            # 获取观测
+            obs = center.get_observation()
+            if not obs:
+                print("未获取到观测数据，跳过...")
+                continue
+
+            model_obs = build_model_obs(obs, center.config.arms, mapping)
+            
+            # 调用推理
+            resp = client.call("infer", model_obs)
+            action = np.asarray(resp.get("action"))
+            
+            # 确保 action 是 2D 数组 (action_horizon, action_dim)
+            if action.ndim == 1:
+                # 如果是 1D，转换为 2D (1, action_dim)
+                action = action.reshape(1, -1)
+            action_seq = action
+            
+            print(f"Received action sequence: shape={action_seq.shape}")
+            
+            # 执行动作序列
+            for step_idx_in_seq, action_h in enumerate(action_seq):
+                dc_action = map_action_to_datacenter(action_h, center.config.arms, mapping)
+                
+                print(f"  Step {step_idx_in_seq + 1}/{len(action_seq)}: Publishing action: [{' '.join([f'{num:.8f}' for num in dc_action])}]")
+                #input("请确认是下发动作")
+
+                center.publish_action(dc_action)
+                
+                time.sleep(1.0 / send_freq if send_freq > 0 else 0)
+
+            print(f"step {step_idx + 1}/{max_steps} completed, action_seq_shape={action_seq.shape}")
+
+    except ActionSafetyError as e:
+        print("\n" + "=" * 60)
+        print("[紧急停止] 检测到动作异常，程序终止！")
+        print("=" * 60)
+        print(str(e))
+        print("=" * 60 + "\n")
+        # 停止交互中心
+        center.stop()
+        sys.exit(1)
 
 
 __all__ = [
+    "ActionSafetyError",
     "get_camera_image",
     "build_agent_pos",
     "build_model_obs",

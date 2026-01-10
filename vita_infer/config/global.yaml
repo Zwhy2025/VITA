@@ -14,7 +14,8 @@ model:
   device: "cuda:0" # 运行设备: cuda|cpu|cuda:0|cuda:1 (可指定具体GPU)
 
 client:
-  server_host: "127.0.0.1"
+  # server_host: "127.0.0.1"
+  server_host: "192.168.200.200"
   server_port: 8548
   send_freq: 30 # 动作发送频率 (Hz)，与训练 fps 保持一致
   max_steps: 1000
