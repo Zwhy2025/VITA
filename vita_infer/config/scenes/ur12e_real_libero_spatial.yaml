@@ -33,6 +33,9 @@ datacenter:
     timestamp_tolerance: 0.0015
     sync_target: "image" # 同步目标: qpos 或 image
 
+  safety:
+    action_delta_threshold: 0.2 # 相邻帧动作变化阈值，超过则报错终止程序
+
 # 模型输入输出映射配置
 mapping:
   # 机械臂配置：模型训练时使用单臂（7维：6 dof + 1 gripper）

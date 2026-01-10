@@ -146,8 +146,6 @@ def run_inference_loop(
     try:
         for step_idx in range(max_steps):
 
-            print("等待运动到位！")
-            time.sleep(0.4)
 
             print(f"\n=== Step {step_idx + 1}/{max_steps} ===")
             #input("请确认是否执行推理")
@@ -175,16 +173,15 @@ def run_inference_loop(
             # 执行动作序列
             for step_idx_in_seq, action_h in enumerate(action_seq):
                 dc_action = map_action_to_datacenter(action_h, center.config.arms, mapping)
-                
-                print(f"  Step {step_idx_in_seq + 1}/{len(action_seq)}: Publishing action: [{' '.join([f'{num:.8f}' for num in dc_action])}]")
+                print(f"  Step {step_idx_in_seq + 1}/{len(action_seq)}: Publishing action: [{' '.join([f'{num:.8f}' for num in dc_action])}]:{dc_action}")
                 #input("请确认是下发动作")
 
                 center.publish_action(dc_action)
                 
                 time.sleep(1.0 / send_freq if send_freq > 0 else 0)
 
-            print(f"step {step_idx + 1}/{max_steps} completed, action_seq_shape={action_seq.shape}")
-
+            # 补偿运动延时
+            time.sleep(0.21)
     except ActionSafetyError as e:
         print("\n" + "=" * 60)
         print("[紧急停止] 检测到动作异常，程序终止！")
