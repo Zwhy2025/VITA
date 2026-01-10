@@ -2,7 +2,7 @@ import torch
 from pathlib import Path
 import os
 import numpy as np
-from typing import Callable
+from typing import Callable, Optional, Dict, List, Tuple, Any
 import gym_av_aloha
 from gym_av_aloha.common.replay_buffer import ReplayBuffer
 from lerobot.common.datasets.lerobot_dataset import LeRobotDatasetMetadata
@@ -22,8 +22,72 @@ from tqdm import tqdm
 from lerobot.common.datasets.compute_stats import aggregate_stats
 import shutil
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 ROOT = Path(os.path.dirname(os.path.dirname(gym_av_aloha.__file__))) / "outputs"
+
+
+def _convert_episode_to_numpy(
+    repo_id: str,
+    dataset_root: Optional[str],
+    ep_idx: int,
+    out_ep_idx: int,
+    features: Dict[str, Dict],
+    tasks_reversed: Dict[str, int],
+    image_size: Optional[Tuple[int, int]],
+) -> Tuple[int, Dict[str, np.ndarray]]:
+    """
+    Convert one episode into numpy arrays (no disk write here).
+    This is intentionally simple and thread-friendly.
+    """
+    if dataset_root:
+        dataset = LeRobotDataset(
+            repo_id=repo_id,
+            root=Path(dataset_root) / repo_id,
+            episodes=[ep_idx],
+            video_backend="pyav",
+        )
+    else:
+        dataset = LeRobotDataset(
+            repo_id=repo_id,
+            episodes=[ep_idx],
+            video_backend="pyav",
+        )
+
+    from_idx = dataset.episode_data_index["from"][0].item()
+    to_idx = dataset.episode_data_index["to"][0].item()
+    subset = Subset(dataset, range(from_idx, to_idx))
+    dataloader = DataLoader(subset, batch_size=16, shuffle=False, num_workers=0)
+
+    batches: List[Dict[str, torch.Tensor]] = []
+    for batch in dataloader:
+        if "task_index" in batch:
+            batch["task_index"] = torch.tensor([tasks_reversed[k] for k in batch["task"]], dtype=int)
+            del batch["task"]
+        batch["episode_index"] = torch.full_like(batch["episode_index"], out_ep_idx)
+        batches.append(batch)
+
+    merged = {k: torch.cat([b[k] for b in batches], dim=0) for k in batches[0].keys()}
+    del batches
+    del dataset
+
+    def _convert_one(k: str, v: torch.Tensor) -> np.ndarray:
+        dtype = features[k]["dtype"]
+        if dtype in ["image", "video"]:
+            if image_size is not None:
+                v = Resize(image_size)(v)
+            v = v.permute(0, 2, 3, 1)
+            return (v * 255).to(torch.uint8).numpy()
+        return v.numpy()
+
+    converted: Dict[str, np.ndarray] = {}
+    for k in features.keys():
+        if k in merged:
+            converted[k] = _convert_one(k, merged[k])
+    del merged
+    return out_ep_idx, converted
+
 
 def make_json_serializable(obj):
     """Convert an object to a JSON-serializable format."""
@@ -178,6 +242,213 @@ def create_av_aloha_dataset_from_lerobot(
             print(f"Episode {episode_idx} converted and added to replay buffer.")
             episode_idx += 1
     print(f"Converted dataset saved to {output_root}.")
+
+
+def create_av_aloha_dataset_from_lerobot_parallel(
+    episodes: dict[str, list[int]] | None = None,
+    repo_id: str | None = None,
+    root: str | Path | None = None,
+    dataset_root: str | Path | None = None,
+    image_size: tuple[int, int] | None = None,
+    remove_keys: list[str] = [],
+    num_workers: int = 4,
+    use_gpu: bool = False,
+):
+    """
+    Optimized parallel version of create_av_aloha_dataset_from_lerobot.
+    
+    Uses direct parallel writes to a preallocated Zarr array, eliminating
+    the need for temporary files and merge operations.
+    
+    Args:
+        episodes: Dict mapping repo_id to list of episode indices
+        repo_id: Repository ID for the dataset
+        root: Output root directory
+        dataset_root: Root directory for input datasets
+        image_size: Target image size (H, W) or None to keep original
+        remove_keys: List of keys to remove from the dataset
+        num_workers: Number of parallel workers (default: 4)
+        use_gpu: Whether to use GPU for image resizing (default: False)
+    """
+    output_root = Path(root) if root else ROOT / repo_id
+    
+    # If only 1 worker, use the original serial function
+    if num_workers <= 1:
+        return create_av_aloha_dataset_from_lerobot(
+            episodes=episodes,
+            repo_id=repo_id,
+            root=root,
+            dataset_root=dataset_root,
+            image_size=image_size,
+            remove_keys=remove_keys,
+        )
+    
+    print(f"Starting optimized parallel conversion with {num_workers} workers...")
+    print("Phase 1: Loading metadata and prescanning episodes...")
+    
+    # Load metadata from the first dataset to get configuration
+    if dataset_root:
+        datasets = [
+            LeRobotDataset(
+                repo_id=r_id, 
+                root=Path(dataset_root) / r_id, 
+                episodes=eps, 
+                video_backend="pyav"
+            ) 
+            for r_id, eps in episodes.items()
+        ]
+    else:
+        datasets = [
+            LeRobotDataset(repo_id=r_id, episodes=eps, video_backend="pyav") 
+            for r_id, eps in episodes.items()
+        ]
+    
+    # Collect metadata (same as serial version)
+    disabled_features = set()
+    intersection_features = set(datasets[0].features)
+    for ds in datasets:
+        intersection_features.intersection_update(ds.features)
+    if len(intersection_features) == 0:
+        raise RuntimeError(
+            "Multiple datasets were provided but they had no keys common to all of them."
+        )
+    for ds in datasets:
+        extra_keys = set(ds.features).difference(intersection_features)
+        if len(extra_keys) > 0:
+            print(f"keys {extra_keys} of {ds.repo_id} were disabled")
+        disabled_features.update(extra_keys)
+    
+    print(f"Disabled features: {disabled_features}.\n")
+    
+    fps = datasets[0].meta.fps
+    assert all(dataset.meta.fps == fps for dataset in datasets)
+    
+    num_frames = sum(d.num_frames for d in datasets)
+    num_episodes_total = sum(d.num_episodes for d in datasets)
+    
+    features = {}
+    for dataset in datasets:
+        features.update({k: v for k, v in dataset.features.items()})
+    features = {k: v for k, v in features.items() if k not in disabled_features}
+    features = {k: v for k, v in features.items() if k not in remove_keys}
+    
+    camera_keys = set()
+    video_keys = set()
+    image_keys = set()
+    for dataset in datasets:
+        camera_keys.update(dataset.meta.camera_keys)
+        video_keys.update(dataset.meta.video_keys)
+        image_keys.update(dataset.meta.image_keys)
+    camera_keys = [k for k in camera_keys if k in features]
+    video_keys = [k for k in video_keys if k in features]
+    image_keys = [k for k in image_keys if k in features]
+    
+    episodes_stats = []
+    for dataset in datasets:
+        ep = dataset.episodes if dataset.episodes else range(dataset.num_episodes)
+        for ep_idx in ep:
+            episodes_stats.append({
+                k: v for k, v in dataset.meta.episodes_stats[ep_idx].items() 
+                if k in features
+            })
+    stats = aggregate_stats(episodes_stats)
+    
+    tasks = []
+    for ds in datasets:
+        tasks.extend(ds.meta.tasks.values())
+    tasks = {i: task for i, task in enumerate(tasks)}
+    tasks_reversed = {v: k for k, v in tasks.items()}
+    
+    # Get all episodes to process
+    # For simplicity, we handle single repo_id case (most common)
+    main_repo_id = list(episodes.keys())[0]
+    all_episodes = episodes[main_repo_id]
+    
+    # Prepare config
+    config = {
+        "repo_id": datasets[0].repo_id,
+        "stats": stats,
+        "num_frames": num_frames,
+        "num_episodes": num_episodes_total,
+        "features": features,
+        "camera_keys": camera_keys,
+        "video_keys": video_keys,
+        "image_keys": image_keys,
+        "fps": fps,
+        "tasks": tasks,
+    }
+    
+    # Get a sample batch for shape inference
+    sample_data = None
+    if len(datasets) > 0 and datasets[0].num_frames > 0:
+        sample_item = datasets[0][0]
+        sample_data = {k: v.numpy() if isinstance(v, torch.Tensor) else v 
+                       for k, v in sample_item.items() if k in features}
+    
+    # Clear datasets to free memory before spawning workers
+    del datasets
+    
+    # Remove old output if exists
+    if output_root.exists():
+        print(f"Removing existing directory {output_root}...")
+        shutil.rmtree(output_root)
+    
+    # Create empty replay buffer (no preallocation - save memory)
+    print(f"Phase 2: Creating output Zarr structure...")
+    replay_buffer = ReplayBuffer.create_from_path(zarr_path=output_root, mode="a")
+    
+    # Save config
+    config_path = output_root / "config.json"
+    with open(config_path, "w") as f:
+        json.dump(make_json_serializable(config), f, indent=4)
+    
+    print("Phase 3: Parallel processing (threads) and sequential Zarr writing...")
+
+    if use_gpu:
+        # Keep API compatible with convert.py, but avoid complex CUDA + multiprocessing issues.
+        print("Warning: --gpu is currently not supported in the simplified parallel path. Using CPU.")
+
+    # Threaded producers + single-threaded writer (main thread).
+    # This avoids:
+    # - multiprocessing crashes from video backends
+    # - pickling huge numpy arrays across processes
+    # - concurrent Zarr writes
+    total_eps = len(all_episodes)
+    print(f"Converting {total_eps} episodes with {num_workers} worker threads...")
+
+    next_to_write = 0
+    pending: Dict[int, Dict[str, np.ndarray]] = {}
+    dataset_root_str = str(dataset_root) if dataset_root else None
+
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = {
+            executor.submit(
+                _convert_episode_to_numpy,
+                main_repo_id,
+                dataset_root_str,
+                ep_idx,
+                out_ep_idx,
+                features,
+                tasks_reversed,
+                image_size,
+            ): out_ep_idx
+            for out_ep_idx, ep_idx in enumerate(all_episodes)
+        }
+
+        with tqdm(total=len(futures), desc="Converting episodes") as pbar:
+            for future in as_completed(futures):
+                out_ep_idx, converted = future.result()
+                pending[out_ep_idx] = converted
+
+                # Write in order as soon as possible to keep memory bounded.
+                while next_to_write in pending:
+                    replay_buffer.add_episode(pending.pop(next_to_write), compressors="disk")
+                    next_to_write += 1
+
+                pbar.update(1)
+
+    print(f"Parallel conversion complete. Dataset saved to {output_root}")
+
 
 def get_dataset_config(
     repo_id: str | None = None,

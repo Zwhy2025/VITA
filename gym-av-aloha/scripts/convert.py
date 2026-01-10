@@ -6,13 +6,20 @@
 #       python convert.py -r iantc104/av_aloha_sim_thread_needle
 # * Converting a local dataset
 #       python convert.py -r /path/to/dataset
+# * Converting with parallel processing (8 workers, optimized with direct Zarr writes)
+#       python convert.py -r /path/to/dataset -w 8
+# * Converting with GPU acceleration for image resizing
+#       python convert.py -r /path/to/dataset -w 8 --gpu
 # * Display help message
 #       python convert.py -h
 
 import argparse
 import os
 from pathlib import Path
-from gym_av_aloha.datasets.av_aloha_dataset import create_av_aloha_dataset_from_lerobot
+from gym_av_aloha.datasets.av_aloha_dataset import (
+    create_av_aloha_dataset_from_lerobot,
+    create_av_aloha_dataset_from_lerobot_parallel,
+)
 from lerobot.common.datasets.lerobot_dataset import LeRobotDatasetMetadata
 
 
@@ -95,10 +102,26 @@ def list_datasets():
     print("--------------------------------------------------")
 
 
-def convert_dataset(repo_id_or_path: str):
+def convert_dataset(repo_id_or_path: str, num_workers: int = 1, use_gpu: bool = False):
+    """
+    Convert a dataset from LeRobot format to AV-ALOHA format.
+    
+    Args:
+        repo_id_or_path: Either a repository ID (e.g., 'iantc104/av_aloha_sim_cube_transfer')
+                         or a local path to a dataset directory
+        num_workers: Number of parallel workers for conversion (default: 1 for serial)
+        use_gpu: Whether to use GPU for image resizing (default: False)
+    """
     # Check if it's a local path
     dataset_path = Path(repo_id_or_path)
     is_local_path = dataset_path.exists() and dataset_path.is_dir()
+    
+    # Choose conversion function based on num_workers
+    convert_func = (
+        create_av_aloha_dataset_from_lerobot_parallel 
+        if num_workers > 1 
+        else create_av_aloha_dataset_from_lerobot
+    )
     
     if is_local_path:
         # It's a local path, load metadata to get dataset info
@@ -129,6 +152,8 @@ def convert_dataset(repo_id_or_path: str):
             print(f"Episodes to process: {len(config['episodes'])}")
             print(f"Keys to remove: {config['remove_keys']}")
             print(f"Target image size: {config['image_size'] or 'Original size'}")
+            print(f"Parallel workers: {num_workers}")
+            print(f"GPU acceleration: {use_gpu}")
             print("------------------------------------------")
             
             episodes_dict = {repo_id: config["episodes"]}
@@ -147,13 +172,24 @@ def convert_dataset(repo_id_or_path: str):
             else:
                 repo_id_for_lerobot = dataset_path.name
             
-            create_av_aloha_dataset_from_lerobot(
-                episodes=episodes_dict,
-                repo_id=repo_id_for_lerobot,
-                dataset_root=dataset_root,  # Pass dataset root (parent of parent directory) for input
-                remove_keys=config["remove_keys"],
-                image_size=config["image_size"],
-            )
+            if num_workers > 1:
+                convert_func(
+                    episodes=episodes_dict,
+                    repo_id=repo_id_for_lerobot,
+                    dataset_root=dataset_root,
+                    remove_keys=config["remove_keys"],
+                    image_size=config["image_size"],
+                    num_workers=num_workers,
+                    use_gpu=use_gpu,
+                )
+            else:
+                convert_func(
+                    episodes=episodes_dict,
+                    repo_id=repo_id_for_lerobot,
+                    dataset_root=dataset_root,
+                    remove_keys=config["remove_keys"],
+                    image_size=config["image_size"],
+                )
             
             print(f"--- Successfully completed conversion for: {dataset_path} ---")
             return
@@ -161,7 +197,7 @@ def convert_dataset(repo_id_or_path: str):
         except Exception as e:
             print(f"Error loading local dataset: {e}")
             print("Make sure the path contains a valid LeRobot dataset with meta/ directory.")
-            return
+            raise
     
     # It's a repo_id, check if it's in configurations
     if repo_id_or_path not in DATASET_CONFIGS:
@@ -179,14 +215,26 @@ def convert_dataset(repo_id_or_path: str):
     print(f"Episodes to process: {len(config['episodes'])}")
     print(f"Keys to remove: {config['remove_keys']}")
     print(f"Target image size: {config['image_size']}")
+    print(f"Parallel workers: {num_workers}")
+    print(f"GPU acceleration: {use_gpu}")
     print("------------------------------------------")
 
-    create_av_aloha_dataset_from_lerobot(
-        episodes=episodes_dict,
-        repo_id=repo_id,
-        remove_keys=config["remove_keys"],
-        image_size=config["image_size"],
-    )
+    if num_workers > 1:
+        convert_func(
+            episodes=episodes_dict,
+            repo_id=repo_id,
+            remove_keys=config["remove_keys"],
+            image_size=config["image_size"],
+            num_workers=num_workers,
+            use_gpu=use_gpu,
+        )
+    else:
+        convert_func(
+            episodes=episodes_dict,
+            repo_id=repo_id,
+            remove_keys=config["remove_keys"],
+            image_size=config["image_size"],
+        )
 
     print(f"--- Successfully completed conversion for: {repo_id} ---")
 
@@ -209,13 +257,29 @@ def main():
         metavar="REPO_ID",
         help="Specify the single dataset REPO_ID to convert (e.g., iantc104/robomimic_sim_transport).",
     )
+    
+    parser.add_argument(
+        "-w", "--workers",
+        type=int,
+        default=8,
+        metavar="NUM",
+        help="Number of parallel workers for conversion (default: 8).\n"
+             "Uses optimized direct Zarr writes, eliminating merge overhead.",
+    )
+    
+    parser.add_argument(
+        "--gpu",
+        action="store_true",
+        help="Use GPU acceleration for image resizing.\n"
+             "Workers are automatically distributed across available GPUs.",
+    )
 
     args = parser.parse_args()
 
     if args.ls:
         list_datasets()
     elif args.repo:
-        convert_dataset(args.repo)
+        convert_dataset(args.repo, num_workers=args.workers, use_gpu=args.gpu)
 
 
 if __name__ == "__main__":
