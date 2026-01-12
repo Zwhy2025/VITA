@@ -22,7 +22,7 @@ except ImportError:
     LeRobotDataset = None
 
 # 导入本地的转换函数
-from vita_data.datasets import create_av_aloha_dataset_from_lerobot
+from dataprocess.core.datasets import create_av_aloha_dataset_from_lerobot
 
 # 确定输出根目录（使用环境变量或默认路径）
 if 'FLARE_DATASETS_DIR' in os.environ:
@@ -113,9 +113,11 @@ def list_datasets():
 
 def convert_dataset(repo_id: str, output_root: Path | None = None):
     """
-    原始版本的convert_dataset函数（从dcc5e3d版本备份）
+    转换数据集从 LeRobot 格式到 AV-ALOHA 格式。
     
-    此函数完全独立，使用本地的实现，不调用项目内的库。
+    Args:
+        repo_id: 数据集仓库 ID
+        output_root: 输出根目录，如果为 None 则使用默认路径
     """
     if not LEROBOT_AVAILABLE:
         print("Error: LeRobotDataset is not available. Please install lerobot or provide dataset objects.")

@@ -13,8 +13,8 @@ import shutil
 import json
 
 # 使用本地的 ReplayBuffer 和 compute_stats
-from vita_data.replay_buffer import ReplayBuffer
-from vita_data.compute_stats import aggregate_stats
+from dataprocess.core.replay_buffer import ReplayBuffer
+from dataprocess.core.compute_stats import aggregate_stats
 
 
 def make_json_serializable(obj):
@@ -38,9 +38,7 @@ def create_av_aloha_dataset_from_lerobot(
     remove_keys: list[str] = [],
 ):
     """
-    原始版本的数据转换函数（从dcc5e3d版本备份）
-    
-    此函数完全独立，不调用项目内的任何库。
+    将 LeRobot 格式的数据集转换为 AV-ALOHA 格式。
     
     Args:
         datasets: LeRobotDataset 对象列表，需要从外部创建并传入

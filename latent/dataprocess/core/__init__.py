@@ -1,5 +1,5 @@
 """
-VITA Data - 数据转换功能模块
+Core data processing modules
 """
 
 from dataprocess.core.datasets import create_av_aloha_dataset_from_lerobot
@@ -12,3 +12,4 @@ __all__ = [
     "compute_stats",
     "aggregate_stats",
 ]
+
