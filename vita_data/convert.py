@@ -1,14 +1,41 @@
 # Convert datasets from LeRobot to AV-ALOHA which is MUCH FASTER for training
+# 
+# 独立实现版本 - 不调用项目内的任何库
+# 原始代码备份（从dcc5e3d版本）
+#
 # Usage:
 # * Listing all available datasets
-#       python convert.py -l
+#       python vita_data/convert.py -l
 # * Converting a single task dataset
-#       python convert.py -r iantc104/av_aloha_sim_thread_needle
+#       python vita_data/convert.py -r iantc104/av_aloha_sim_thread_needle
 # * Display help message
-#       python convert.py -h
+#       python vita_data/convert.py -h
+#
+# 注意：此脚本需要从外部导入 LeRobotDataset 来创建数据集对象
+# 实际使用时需要先创建 LeRobotDataset 对象，然后调用转换函数
 
 import argparse
-from gym_av_aloha.datasets.av_aloha_dataset import create_av_aloha_dataset_from_lerobot
+from pathlib import Path
+import os
+
+# 导入标准库中的 LeRobotDataset（如果可用）
+# 如果不可用，需要从外部传入
+try:
+    from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+    LEROBOT_AVAILABLE = True
+except ImportError:
+    LEROBOT_AVAILABLE = False
+    LeRobotDataset = None
+
+# 导入本地的转换函数
+from vita_data.datasets import create_av_aloha_dataset_from_lerobot
+
+# 确定输出根目录（使用环境变量或默认路径）
+if 'FLARE_DATASETS_DIR' in os.environ:
+    DEFAULT_OUTPUT_ROOT = Path(os.environ['FLARE_DATASETS_DIR'])
+else:
+    # 默认使用当前目录下的 outputs
+    DEFAULT_OUTPUT_ROOT = Path(__file__).parent.parent / "gym-av-aloha" / "outputs"
 
 
 DATASET_CONFIGS = {
@@ -90,25 +117,44 @@ def list_datasets():
     print("--------------------------------------------------")
 
 
-def convert_dataset(repo_id: str):
+def convert_dataset(repo_id: str, output_root: Path | None = None):
+    """
+    原始版本的convert_dataset函数（从dcc5e3d版本备份）
+    
+    此函数完全独立，使用本地的实现，不调用项目内的库。
+    """
+    if not LEROBOT_AVAILABLE:
+        print("Error: LeRobotDataset is not available. Please install lerobot or provide dataset objects.")
+        return
+    
     if repo_id not in DATASET_CONFIGS:
         print(f"Error: Repository ID '{repo_id}' not found in configurations.")
         list_datasets()
         return
 
     config = DATASET_CONFIGS[repo_id]
-
     episodes_dict = {repo_id: config["episodes"]}
+    
+    # 确定输出路径
+    if output_root is None:
+        output_root = DEFAULT_OUTPUT_ROOT / repo_id
+    else:
+        output_root = Path(output_root) / repo_id
 
     print(f"--- Converting Dataset: {repo_id} ---")
     print(f"Episodes to process: {len(config['episodes'])}")
     print(f"Keys to remove: {config['remove_keys']}")
     print(f"Target image size: {config['image_size']}")
+    print(f"Output directory: {output_root}")
     print("------------------------------------------")
 
+    # 创建 LeRobotDataset 对象
+    datasets = [LeRobotDataset(repo_id=r_id, episodes=episodes) for r_id, episodes in episodes_dict.items()]
+
+    # 调用转换函数
     create_av_aloha_dataset_from_lerobot(
-        episodes=episodes_dict,
-        repo_id=repo_id,
+        datasets=datasets,
+        root=output_root,
         remove_keys=config["remove_keys"],
         image_size=config["image_size"],
     )
@@ -134,13 +180,21 @@ def main():
         metavar="REPO_ID",
         help="Specify the single dataset REPO_ID to convert (e.g., iantc104/robomimic_sim_transport).",
     )
+    
+    parser.add_argument(
+        "-o", "--output",
+        type=str,
+        metavar="OUTPUT_DIR",
+        help="Output directory for converted dataset (default: FLARE_DATASETS_DIR or ./gym-av-aloha/outputs).",
+    )
 
     args = parser.parse_args()
 
     if args.ls:
         list_datasets()
     elif args.repo:
-        convert_dataset(args.repo)
+        output_root = Path(args.output) if args.output else None
+        convert_dataset(args.repo, output_root=output_root)
 
 
 if __name__ == "__main__":
