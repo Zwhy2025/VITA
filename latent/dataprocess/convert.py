@@ -1,7 +1,4 @@
 # Convert datasets from LeRobot to AV-ALOHA which is MUCH FASTER for training
-# 
-# 独立实现版本 - 不调用项目内的任何库
-# 原始代码备份（从dcc5e3d版本）
 #
 # Usage:
 # * Listing all available datasets
@@ -11,9 +8,6 @@
 # * Display help message
 #       python vita_data/convert.py -h
 #
-# 注意：此脚本需要从外部导入 LeRobotDataset 来创建数据集对象
-# 实际使用时需要先创建 LeRobotDataset 对象，然后调用转换函数
-
 import argparse
 from pathlib import Path
 import os

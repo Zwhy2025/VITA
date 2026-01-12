@@ -1,8 +1,6 @@
 """
-ReplayBuffer - Zarr-based temporal datastructure (独立实现)
-
-从 gym-av-aloha/gym_av_aloha/common/replay_buffer.py 复制的独立实现
-不依赖项目内的任何库
+ReplayBuffer - Zarr-based temporal datastructure
+从 gym-av-aloha/gym_av_aloha/common/replay_buffer.py 复制
 """
 from typing import Union, Dict, Optional
 import os

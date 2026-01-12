@@ -1,8 +1,5 @@
 """
-VITA Data - 数据转换功能模块（独立实现）
-
-此模块包含原始的数据转换功能，完全独立，不调用项目内的任何库。
-使用本地实现的 ReplayBuffer 和 compute_stats。
+VITA Data - 数据转换功能模块
 """
 
 from vita_data.datasets import create_av_aloha_dataset_from_lerobot

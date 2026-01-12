@@ -1,8 +1,5 @@
 """
-compute_stats - 统计计算工具 (独立实现)
-
-从 lerobot/lerobot/common/datasets/compute_stats.py 复制的独立实现
-不依赖项目内的任何库
+从 lerobot/lerobot/common/datasets/compute_stats.py 复制
 """
 import numpy as np
 

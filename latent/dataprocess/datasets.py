@@ -1,9 +1,5 @@
 """
-数据转换模块 - 独立实现（从dcc5e3d版本备份）
-
-此模块包含原始的数据转换功能，完全独立，不调用项目内的任何库。
-使用本地实现的 ReplayBuffer 和 compute_stats。
-LeRobotDataset 需要从外部传入（通过参数）。
+数据转换模块
 """
 import torch
 from pathlib import Path
