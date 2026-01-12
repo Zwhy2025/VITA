@@ -741,3 +741,8 @@ flare_outputs/
 - `checkpoints/step_XXXXX/model.safetensors` - 模型权重
 - `checkpoints/step_XXXXX/config.json` - 模型配置
 - `logs/train_config_*.yaml` - 训练配置（包含数据集路径、归一化统计等）
+
+
+
+## 
+对比当前代码与 dcc5e3d 的差异，生成一个排除 latent 目录的 git diff 文件。然后基于该 diff 分析并编写一份详细的 Markdown 变更报告，要求：1. 自动提取 flare 核心配置（如 steps, batch_size）的参数变更对比；2. 识别并列出 envs/ 下新增的环境脚本及其用途；3. 识别 flare/configs/task/ 下新增的任务场景名称；4. 提供分类的文件变更统计汇总。
