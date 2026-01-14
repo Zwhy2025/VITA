@@ -6,7 +6,7 @@ from typing import Union, Type, Optional
 import logging
 
 from .base import BaseDataConverter, ConversionConfig
-from .lerobot import LeRobotConverter, OptimizedLeRobotConverter
+from .lerobot import LeRobotConverter, OptimizedLeRobotConverter, TorchCodecGPUConverter
 from .mcap import MCAPConverter
 
 
@@ -61,9 +61,9 @@ class ConverterFactory:
 def _register_builtin_converters():
     """注册内置转换器"""
     ConverterFactory.register_converter('lerobot', LeRobotConverter)
-    ConverterFactory.register_converter('lerobot', LeRobotConverter)
     ConverterFactory.register_converter('mcap', MCAPConverter)
     ConverterFactory.register_converter('lerobot_fast', OptimizedLeRobotConverter)
+    ConverterFactory.register_converter('lerobot_gpu', TorchCodecGPUConverter)
 
 
 # 自动注册

@@ -535,3 +535,249 @@ class OptimizedLeRobotConverter(BaseDataConverter):
                 converted[key] = value
         
         return converted
+
+
+class TorchCodecGPUConverter(BaseDataConverter):
+    """
+    使用 TorchCodec GPU 加速的 LeRobot 格式转换器
+    
+    利用 NVIDIA GPU 硬件解码视频，比纯 CPU 方案更快。
+    适合有强大 GPU 的机器。
+    """
+    
+    def detect_format(self, path: Union[str, Path]) -> bool:
+        """检测是否为 LeRobot 格式"""
+        path = Path(path)
+        
+        required_dirs = ['data', 'meta']
+        required_files = ['meta/info.json']
+        
+        for dir_name in required_dirs:
+            if not (path / dir_name).is_dir():
+                return False
+        
+        for file_name in required_files:
+            if not (path / file_name).is_file():
+                return False
+        
+        try:
+            import json
+            with open(path / 'meta/info.json', 'r') as f:
+                info = json.load(f)
+            
+            required_fields = ['codebase_version', 'features']
+            return all(field in info for field in required_fields)
+        except Exception:
+            return False
+    
+    def load_datasets(self, path: Union[str, Path]) -> List[Any]:
+        """加载数据集信息"""
+        import json
+        
+        path = Path(path)
+        
+        with open(path / 'meta/info.json', 'r') as f:
+            info = json.load(f)
+        
+        video_path_template = info.get('video_path', '')
+        
+        num_episodes = info.get('total_episodes', 0)
+        num_frames = info.get('total_frames', 0)
+        fps = info.get('fps', 30)
+        
+        self.logger.info(f"TorchCodec GPU mode: {num_episodes} episodes, {num_frames} frames")
+        
+        return [{
+            'num_episodes': num_episodes,
+            'num_frames': num_frames,
+            'features': info.get('features', {}),
+            'fps': fps,
+            'chunk': 0,
+            'path': str(path),
+        }]
+    
+    def extract_metadata(self, datasets: List[Any], path: Optional[Union[str, Path]] = None) -> Dict[str, Any]:
+        """提取元数据"""
+        if not datasets:
+            raise ValueError("数据集列表为空")
+        
+        dataset_info = datasets[0]
+        path = Path(path) if path else None
+        
+        features = dataset_info.get('features', {})
+        features = {k: v for k, v in features.items() if k not in self.config.remove_keys}
+        
+        video_keys = [k for k in features.keys() if 'image' in k.lower() or 'video' in k.lower()]
+        
+        return {
+            "repo_id": str(path) if path else "",
+            "stats": {},
+            "num_frames": dataset_info.get('num_frames', 0),
+            "num_episodes": dataset_info.get('num_episodes', 0),
+            "features": features,
+            "camera_keys": [],
+            "video_keys": video_keys,
+            "image_keys": video_keys,
+            "fps": dataset_info.get('fps', 30),
+            "tasks": {},
+            "_dataset_info": dataset_info,
+        }
+    
+    def convert_episode(self, episode_data: Dict[str, Any], episode_idx: int) -> Dict[str, Any]:
+        """转换单个 episode 数据"""
+        return episode_data
+    
+    def _get_num_episodes(self, dataset: Any) -> int:
+        """获取 episode 数量"""
+        return dataset.get('num_episodes', 0)
+    
+    def _get_episode_data(self, dataset: Any, episode_idx: int) -> Dict[str, Any]:
+        """获取单个 episode 的数据 (使用 TorchCodec GPU)"""
+        import pandas as pd
+        
+        dataset_info = dataset
+        base_path = dataset_info['path']
+        chunk = dataset_info.get('chunk', 0)
+        
+        result = {
+            'episode_idx': episode_idx,
+            '_metadata': {
+                'features': dataset_info.get('features', {}),
+                'tasks': {},
+            }
+        }
+        
+        parquet_path = Path(base_path) / 'data' / f'chunk-{chunk:03d}' / f'episode_{episode_idx:06d}.parquet'
+        if parquet_path.exists():
+            df = pd.read_parquet(parquet_path)
+            for col in df.columns:
+                if col.startswith('_'):
+                    continue
+                values = df[col].values
+                if values.dtype == object:
+                    values = np.array([np.asarray(v) for v in values])
+                result[col] = values
+        else:
+            self.logger.warning(f"Parquet not found: {parquet_path}")
+        
+        features = dataset_info.get('features', {})
+        
+        for video_key in features.keys():
+            if 'image' not in video_key.lower() and 'video' not in video_key.lower():
+                continue
+            
+            video_path = Path(base_path) / 'videos' / f'chunk-{chunk:03d}' / video_key / f'episode_{episode_idx:06d}.mp4'
+            if video_path.exists():
+                frames = self._read_video_gpu(str(video_path))
+                result[video_key] = frames
+        
+        return result
+    
+    def _read_video_gpu(self, video_path: str) -> np.ndarray:
+        """使用 TorchCodec GPU 读取视频"""
+        try:
+            from torchvision import io as tv_io
+            import torch
+            
+            # 检查 GPU decoder 是否可用
+            if not tv_io._HAS_GPU_VIDEO_DECODER:
+                raise RuntimeError("GPU video decoder not available")
+            
+            reader = tv_io.VideoReader(video_path, "video", device="cuda")
+            frames_list = []
+            
+            for frame in reader:
+                frames_list.append(frame["data"])
+            
+            if frames_list:
+                frames_tensor = torch.stack(frames_list)
+                if frames_tensor.is_cuda:
+                    frames_tensor = frames_tensor.cpu()
+                return frames_tensor.numpy()
+            
+            return np.zeros((0, 480, 640, 3), dtype=np.uint8)
+            
+        except Exception as e:
+            self.logger.warning(f"GPU decoding failed ({e}), using PyAV fallback")
+            return self._read_video_pyav(video_path)
+    
+    def _read_video_pyav(self, video_path: str) -> np.ndarray:
+        """使用 PyAV 读取视频 (CPU fallback)"""
+        import av
+        
+        container = av.open(video_path)
+        stream = container.streams.video[0]
+        stream.thread_type = 'AUTO'
+        
+        frames = []
+        for frame in container.decode(stream):
+            arr = frame.to_ndarray()
+            if arr.ndim == 2:
+                arr = arr[..., np.newaxis]
+            if arr.shape[-1] == 1:
+                arr = np.repeat(arr, 3, axis=-1)
+            frames.append(arr)
+        
+        return np.stack(frames) if frames else np.zeros((0, 480, 640, 3), dtype=np.uint8)
+    
+    def _convert_episodes(self, datasets: List[Any], replay_buffer: Any, metadata: Dict[str, Any]):
+        """优化的顺序转换"""
+        import time
+        import gc
+        
+        dataset_info = datasets[0]
+        num_episodes = self._get_num_episodes(dataset_info)
+        total_episodes = metadata.get('num_episodes', num_episodes)
+        
+        self.logger.info(f"Starting TorchCodec GPU conversion of {num_episodes} episodes")
+        
+        episode_idx = 0
+        for ep_idx in range(num_episodes):
+            if self.config.episodes and episode_idx not in self.config.episodes:
+                episode_idx += 1
+                continue
+            
+            start_time = time.time()
+            self.logger.info(f"Converting episode {episode_idx + 1}/{total_episodes}")
+            
+            episode_data = self._get_episode_data(dataset_info, ep_idx)
+            
+            if 'episode_index' in episode_data:
+                episode_data['episode_index'] = np.full_like(episode_data['episode_index'], episode_idx)
+            else:
+                num_frames = len(episode_data.get('observation.state', []))
+                episode_data['episode_index'] = np.full(num_frames, episode_idx, dtype=np.int64)
+            
+            converted_data = self._convert_episode_data(episode_data, episode_idx, dataset_info)
+            
+            replay_buffer.add_episode(converted_data, compressors=self.config.compressors)
+            
+            if self.config.profile:
+                self._timing_stats[f'episode_{episode_idx}'] = time.time() - start_time
+            
+            del episode_data, converted_data
+            gc.collect()
+            
+            episode_idx += 1
+    
+    def _convert_episode_data(self, episode_data: Dict[str, Any], episode_idx: int, config: Any):
+        """转换 episode 数据"""
+        dataset_info = config
+        features = dataset_info.get('features', {})
+        converted = {}
+        
+        for key, value in episode_data.items():
+            if key.startswith('_'):
+                continue
+            
+            if key not in features:
+                continue
+            
+            if isinstance(value, np.ndarray):
+                converted[key] = value
+            elif isinstance(value, (list, tuple)):
+                converted[key] = np.array(value)
+            else:
+                converted[key] = value
+        
+        return converted

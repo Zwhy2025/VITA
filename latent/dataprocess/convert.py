@@ -169,7 +169,14 @@ def main():
         '--optimized', '-O',
         action='store_true',
         default=False,
-        help='使用优化的转换器（PyAV + pandas，速度提升 50-60x）'
+        help='使用优化的转换器（PyAV + pandas，速度提升 5-10x）'
+    )
+    
+    parser.add_argument(
+        '--gpu', '-G',
+        action='store_true',
+        default=False,
+        help='使用 TorchCodec GPU 加速转换器（需要 NVIDIA GPU，速度提升取决于 GPU）'
     )
     
     args = parser.parse_args()
@@ -230,8 +237,11 @@ def main():
             print("✅ 输入数据验证通过")
         
         # 创建转换器
-        if args.optimized:
-            print("🚀 使用优化版转换器 (PyAV + pandas, 速度提升 50-60x)")
+        if args.gpu:
+            print("🎮 使用 TorchCodec GPU 加速转换器")
+            converter = ConverterFactory.create_converter('lerobot_gpu', config)
+        elif args.optimized:
+            print("🚀 使用优化版转换器 (PyAV + pandas, 速度提升 5-10x)")
             converter = ConverterFactory.create_converter('lerobot_fast', config)
         elif args.format == 'auto':
             converter = ConverterFactory.detect_and_create(input_path, config)

@@ -30,6 +30,43 @@ conda activate vita
 echo "安装 cmake..."
 conda install cmake -y
 
+# 安装 FFmpeg (带 CUDA 支持)
+echo "安装 FFmpeg (带 CUDA 支持)..."
+conda install -c conda-forge ffmpeg nv-codec-headers -y
+
+# 安装 PyTorch (CUDA 版本)
+echo "安装 PyTorch CUDA 版本..."
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+
+# 从源码安装 torchvision 以启用 GPU 视频解码
+echo "从源码安装 torchvision (启用 GPU 视频解码)..."
+cd "$SCRIPT_DIR"
+
+# 检查是否已经安装了支持 GPU 的 torchvision
+if python3 -c "from torchvision import io; exit(0 if io._HAS_GPU_VIDEO_DECODER else 1)" 2>/dev/null; then
+    echo "  ✅ torchvision 已支持 GPU 视频解码"
+else
+    echo "  正在从源码编译 torchvision..."
+    
+    # 克隆 torchvision
+    if [ ! -d "torchvision" ]; then
+        git clone https://github.com/pytorch/vision.git
+    fi
+    cd vision
+    
+    # 确保使用匹配的版本
+    TORCH_VERSION=$(python3 -c "import torch; print(torch.__version__.split('+')[0])")
+    git checkout "v$(echo $TORCH_VERSION | cut -d. -f1,2).*"
+    
+    # 安装依赖
+    pip install -y pillow zstandard
+    
+    # 从源码编译 (需要较长时间)
+    BUILD_CUDA=1 python3 setup.py develop
+    
+    cd "$SCRIPT_DIR"
+fi
+
 # 安装项目依赖
 echo "安装项目依赖..."
 pip install -e .
@@ -44,14 +81,6 @@ echo "安装 LeRobot 依赖..."
 cd lerobot
 pip install -e .
 cd "$SCRIPT_DIR"
-
-# 安装 ffmpeg
-echo "安装 ffmpeg..."
-conda install -c conda-forge ffmpeg -y
-
-# 修复 numpy/pandas 兼容性问题（如果存在）
-echo "检查并修复 numpy/pandas 兼容性..."
-pip install --upgrade --force-reinstall numpy pandas || true
 
 # 设置数据集存储路径环境变量
 FLARE_DATASETS_DIR="${SCRIPT_DIR}/gym-av-aloha/outputs"
@@ -68,6 +97,15 @@ fi
 
 # 在当前 shell 中设置环境变量（立即生效）
 export FLARE_DATASETS_DIR="${FLARE_DATASETS_DIR}"
+
+# 验证 GPU 视频解码
+echo ""
+echo "验证 GPU 视频解码支持..."
+if python3 -c "from torchvision import io; print(f'GPU decoder: {io._HAS_GPU_VIDEO_DECODER}')" 2>/dev/null; then
+    echo "  ✅ GPU 视频解码已启用"
+else
+    echo "  ⚠️  GPU 视频解码未启用，可能需要手动编译 torchvision"
+fi
 
 # 安装 AV-ALOHA 依赖
 echo "安装 AV-ALOHA 依赖..."
