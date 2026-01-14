@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vita-dataprocess"
+version = "1.0.0"
+description = "VITA 数据处理和转换工具"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=1.9.0",
+    "torchvision>=0.10.0",
+    "numpy>=1.20.0",
+    "zarr>=2.12.0",
+    "tqdm>=4.60.0",
+    "pyyaml>=6.0",
+    "opencv-python>=4.5.0",
+]
+
+[project.optional-dependencies]
+lerobot = ["lerobot"]
+mcap = ["mcap"]
+
+[project.scripts]
+vita-convert = "latent.dataprocess.convert:main"
+
+[tool.setuptools.packages.find]
+where = ["../.."]
+include = ["latent.dataprocess*"]

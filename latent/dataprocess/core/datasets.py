@@ -13,8 +13,8 @@ import shutil
 import json
 
 # 使用本地的 ReplayBuffer 和 compute_stats
-from dataprocess.core.replay_buffer import ReplayBuffer
-from dataprocess.core.compute_stats import aggregate_stats
+from .replay_buffer import ReplayBuffer
+from .compute_stats import aggregate_stats
 
 
 def make_json_serializable(obj):
