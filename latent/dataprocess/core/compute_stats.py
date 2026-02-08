@@ -1,25 +1,6 @@
-"""
-从 lerobot/lerobot/common/datasets/compute_stats.py 复制
-"""
 import numpy as np
 
-
 def compute_stats(data: np.ndarray, is_image: bool = False) -> dict[str, np.ndarray]:
-    """Compute statistics (min, max, mean, std, count) from a numpy array.
-    
-    Args:
-        data: Input numpy array of shape (N, ...) where N is the number of samples.
-        is_image: If True, treat data as image and compute per-channel stats with shape (3, 1, 1).
-                  If False, compute stats along the first dimension preserving other dimensions.
-        
-    Returns:
-        Dictionary containing:
-            - "min": Minimum values
-            - "max": Maximum values  
-            - "mean": Mean values
-            - "std": Standard deviation
-            - "count": Total count (shape: (1,))
-    """
     if not isinstance(data, np.ndarray):
         raise ValueError(f"Data must be a numpy array, but got {type(data)} instead.")
     if data.ndim == 0:
@@ -28,9 +9,7 @@ def compute_stats(data: np.ndarray, is_image: bool = False) -> dict[str, np.ndar
     count = np.array([data.shape[0]], dtype=np.float64)
     
     if is_image:
-        # For image data: compute stats per channel and reshape to (3, 1, 1)
         if data.ndim == 4 and data.shape[-1] == 3:
-            # (N, H, W, 3) -> compute stats for each channel
             data_reshaped = data.reshape(-1, 3)
             min_vals = np.min(data_reshaped, axis=0)
             max_vals = np.max(data_reshaped, axis=0)
@@ -46,7 +25,6 @@ def compute_stats(data: np.ndarray, is_image: bool = False) -> dict[str, np.ndar
         else:
             raise ValueError(f"For image data, expected shape (N, H, W, 3), but got {data.shape}")
     
-    # For non-image data, compute stats along the first dimension
     min_vals = np.min(data, axis=0)
     max_vals = np.max(data, axis=0)
     mean_vals = np.mean(data, axis=0)
@@ -78,21 +56,17 @@ def _assert_type_and_shape(stats_list: list[dict[str, dict]]):
 
 
 def aggregate_feature_stats(stats_ft_list: list[dict[str, dict]]) -> dict[str, dict[str, np.ndarray]]:
-    """Aggregates stats for a single feature."""
     means = np.stack([s["mean"] for s in stats_ft_list])
     variances = np.stack([s["std"] ** 2 for s in stats_ft_list])
     counts = np.stack([s["count"] for s in stats_ft_list])
     total_count = counts.sum(axis=0)
 
-    # Prepare weighted mean by matching number of dimensions
     while counts.ndim < means.ndim:
         counts = np.expand_dims(counts, axis=-1)
 
-    # Compute the weighted mean
     weighted_means = means * counts
     total_mean = weighted_means.sum(axis=0) / total_count
 
-    # Compute the variance using the parallel algorithm
     delta_means = means - total_mean
     weighted_variances = (variances + delta_means**2) * counts
     total_variance = weighted_variances.sum(axis=0) / total_count
@@ -107,17 +81,6 @@ def aggregate_feature_stats(stats_ft_list: list[dict[str, dict]]) -> dict[str, d
 
 
 def aggregate_stats(stats_list: list[dict[str, dict]]) -> dict[str, dict[str, np.ndarray]]:
-    """Aggregate stats from multiple compute_stats outputs into a single set of stats.
-
-    The final stats will have the union of all data keys from each of the stats dicts.
-
-    For instance:
-    - new_min = min(min_dataset_0, min_dataset_1, ...)
-    - new_max = max(max_dataset_0, max_dataset_1, ...)
-    - new_mean = (mean of all data, weighted by counts)
-    - new_std = (std of all data)
-    """
-
     _assert_type_and_shape(stats_list)
 
     data_keys = {key for stats in stats_list for key in stats}

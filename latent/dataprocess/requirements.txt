@@ -1,0 +1,9 @@
+pyarrow
+av
+numpy
+Pillow
+tqdm
+zarr
+pandas
+matplotlib
+opencv-python
