@@ -1,0 +1,25 @@
+# @package _global_
+# UR12e 单臂 6-DOF + 双相机
+
+link:
+  cameras:
+    image: "/embodied/front/manip_t/sensor/camera/color"
+    wrist_right_image: "/right_arm/manip_t/sensor/camera/color"
+  arms:
+    right_arm:
+      topic: "/right_arm/manip_t/controller"
+      dof: 6
+
+image:
+  expected_size: [320, 240]
+  normalize: true
+  resize: true
+
+sync:
+  block_timeout: 100.0
+  check_interval: 0.01
+  timestamp_tolerance: 0.0015
+  sync_target: image
+
+safety:
+  action_delta_threshold: 0.2

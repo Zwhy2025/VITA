@@ -1,279 +1,120 @@
 # VITA 推理模块
 
-基于 VITA (Vision-to-Action Flow Matching Policy) 模型的推理部署模块。
+基于 VITA (Vision-to-Action Flow Matching Policy) 模型的单进程推理部署。
 
 ## 目录结构
 
 ```
-vita_infer/
-├── vita_client.py           # 客户端入口(对外暴露)
-├── vita_server.py           # 服务器入口(对外暴露)
-├── config/                  # 配置文件和数据（保持不变）
-│   ├── global.yaml          # 全局配置文件
-│   ├── scenes/              # 场景配置文件目录
-│   │   ├── ur12e_real_libero_spatial.yaml
-│   │   ├── dual_move_thing_to_cup_1.yaml
-│   │   └── README.md
-│   └── data/                # 离线测试数据目录(按场景名组织)
-│       ├── ur12e_real_libero_spatial/
-│       └── dual_move_thing_to_cup_1/
-└── thor/                    # 核心模块
-    ├── __init__.py
-    ├── engine/              # 推理引擎
-    │   ├── __init__.py
-    │   ├── inference.py     # VitaInference 主类
-    │   ├── runner.py        # VitaRunner 观测/动作管理
-    │   └── loader.py        # load_vita_policy 模型加载
-    ├── io/                  # 数据输入输出
-    │   ├── __init__.py
-    │   ├── file.py          # 离线文件数据源
-    │   ├── robot.py         # 在线机器人数据源
-    │   └── obs_builder.py   # 统一的观测构建逻辑
-    ├── robot/               # 机器人控制
-    │   ├── __init__.py
-    │   ├── center.py        # InteractionDataCenter
-    │   ├── nodes.py         # BaseNode, MultiArmJointNode, MultiCameraNode
-    │   └── config.py        # ArmConfig, CameraConfig, RobotTopicConfig
-    ├── network/             # 网络通信
-    │   ├── __init__.py
-    │   ├── protocol.py      # JSON 协议编解码
-    │   └── client.py        # ModelClient
-    └── utils/               # 工具函数
-        ├── __init__.py
-        ├── config.py        # load_config, merge_configs
-        └── image.py         # process_image, resize_image
+latent/infer/
+├── infer.py                # Hydra 入口
+├── runner.py               # InferenceRunner 推理编排
+├── policies/               # 策略层
+│   ├── base_policy.py      # PolicyBase 抽象基类
+│   ├── vita_policy.py      # VitaPolicy 实现
+│   └── loader.py           # 模型加载（config + weights + stats）
+├── envs/                   # 环境层
+│   ├── robot_env.py        # RobotEnvBase 抽象基类
+│   ├── link_robot_env.py   # LinkRobotEnv + LinkCommunicator + ObservationBuilder
+│   └── config.py           # RobotConfig, ArmConfig, ImageConfig, SyncConfig
+└── configs/                # Hydra 配置
+    ├── default.yaml        # 默认配置（模型 + 运行时）
+    └── robot/              # 按机器人类型分
+        ├── ur12e.yaml      # UR12e 单臂 6-DOF
+        └── dual_r2v2.yaml  # R2V2 双臂 7-DOF
 ```
 
-## 依赖
+## 架构
 
-- Python 3.10+
-- PyTorch
-- 已安装的 `flare` 包（VITA 训练代码）
+```
+infer.py (Hydra 入口)
+  └── InferenceRunner (编排)
+        ├── PolicyBase → VitaPolicy (策略推理)
+        └── RobotEnvBase → LinkRobotEnv (硬件交互)
+                              ├── LinkCommunicator (link SDK 通信)
+                              ├── ObservationBuilder (观测构建)
+                              └── check_action_safety (安全检查)
+```
 
-确保 VITA 项目已正确安装：
+- **PolicyBase / VitaPolicy**: 策略抽象，`predict(obs) → action`
+- **RobotEnvBase / LinkRobotEnv**: 环境抽象，`get_obs() → obs`，`step(action)`
+- **InferenceRunner**: 编排 env + policy 的推理主循环
+
+## 使用
 
 ```bash
-cd /root/workspace/VITA
-pip install -e .
+# 默认机器人（ur12e）
+python infer.py
+
+# 指定机器人类型
+python infer.py robot=dual_r2v2
+
+# 覆盖参数
+python infer.py model.device=cuda:1 runtime.max_steps=500
 ```
 
 ## 配置
 
-### 配置文件结构
-
-重构后的配置分为两部分：
-
-1. **全局配置** (`config/global.yaml`): 包含服务器、模型、客户端基础配置
-2. **场景配置** (`config/scenes/*.yaml`): 包含不同场景的模型映射配置
-
-### 全局配置
-
-编辑 `config/global.yaml`（只包含服务器、模型、客户端基础配置）：
+使用 Hydra 管理配置，按机器人类型组织。配置直接映射模型 image key 到硬件 topic：
 
 ```yaml
-server:
-  host: "0.0.0.0"
-  port: 8548
-
-model:
-  checkpoint_dir: "/root/workspace/VITA/checkpoints/step_0000005000"
-  mixed_precision: "bf16"  # bf16|fp16|fp32
-  device: "cuda:0"  # 运行设备: cuda|cpu|cuda:0|cuda:1
-
-client:
-  server_host: "127.0.0.1"
-  server_port: 8548
-  send_freq: 30
-  max_steps: 1000
-  action_timeout: 5.0
-  log_dir: "./real_logs"
-```
-
-### 场景配置
-
-每个场景有自己的配置文件，位于 `config/scenes/` 目录下（包含场景相关的配置）：
-
-```yaml
-# 机器人硬件配置（仅在线模式使用）
-datacenter:
-  arms:
-    right_arm:
-      base_topic: "/right_arm/manip_t/controller"
-      dof: 6
+# configs/robot/ur12e.yaml
+link:
   cameras:
-    front:
-      base_topic: "/embodied/front/manip_t/sensor/camera"
-      streams:
-        rgb: true
-        depth: false
-  buffers:
-    action_buffer_size: 200
-    state_buffer_size: 30
-    camera_buffer_size: 30
-  sync:
-    block_timeout: 100.0
-    check_interval: 0.01
-    timestamp_tolerance: 0.0015
-    sync_target: "image"
+    # model image key → topic（直接映射，无中间层）
+    image: "/embodied/front/manip_t/sensor/camera/color"
+    wrist_right_image: "/right_arm/manip_t/sensor/camera/color"
+  arms:
+    # 声明顺序 = 模型 state/action 向量中的臂顺序
+    right_arm:
+      topic: "/right_arm/manip_t/controller"
+      dof: 6    # 必须配置
 
-# 模型输入输出映射配置
-mapping:
-  model_arm_order: ["right_arm"]
-  model_arm_dof: 6
-  use_gripper: true
-  model_obs_map:
-    observation.images.image: "front"
-    observation.images.wrist_right_image: "wrist_right"
-    observation.state: "qpos"
-  image:
-    normalize: true
-    channel_order: "rgb"
-    expected_size: [320, 240]
-    resize: true
+image:
+  expected_size: [320, 240]
+  normalize: true
+  resize: true
+
+sync:
+  sync_target: image
+
+safety:
+  action_delta_threshold: 0.2
 ```
 
-### 向后兼容
-
-旧的 `config.yaml` 仍然支持，但建议迁移到新的配置结构。
-
-## 使用方法
-
-### 1. 启动推理服务器
-
-```bash
-cd /root/workspace/VITA/vita_infer
-python vita_server.py
-```
-
-可选参数：
-- `--config`: 全局配置文件路径（默认: `config/global.yaml`）
-- `--log-level`: 日志级别 (DEBUG|INFO|WARNING|ERROR)
-
-### 2. 启动客户端
-
-在另一个终端中：
-
-#### 在线模式（连接机器人）
-
-```bash
-# 使用场景名称（推荐）
-python vita_client.py --scene ur12e_real_libero_spatial
-
-# 或指定场景配置文件
-python vita_client.py --scene-config config/scenes/ur12e_real_libero_spatial.yaml
-
-# 或明确指定在线模式
-python vita_client.py --mode online --scene ur12e_real_libero_spatial
-```
-
-#### 离线模式（从文件读取数据）
-
-```bash
-# 使用场景名（自动匹配 config/data/<scene_name> 目录）
-python vita_client.py --mode offline --scene ur12e_real_libero_spatial
-
-# 或指定离线数据目录
-python vita_client.py --mode offline --offline-dir ur12e_real_libero_spatial
-
-# 或指定完整路径
-python vita_client.py --mode offline --offline-dir /path/to/data/directory
-```
-
-**参数说明：**
-- `--global-config`: 全局配置文件路径（默认: `config/global.yaml`）
-- `--scene`: 场景名称（对应 `config/scenes/<scene>.yaml`）
-- `--scene-config`: 场景配置文件路径（覆盖 `--scene`）
-- `--mode`: 运行模式 `online` 或 `offline`（如果指定了 `--offline-dir`，可省略）
-- `--offline-dir`: 离线数据目录路径或子目录名（相对于 config/data 目录）。如果指定了 --scene，会自动匹配 config/data/<scene_name>
-
-### 3. Python API 调用
+## Python API
 
 ```python
-from thor.engine.inference import VitaInference
+from policies.vita_policy import VitaPolicy
+from envs.link_robot_env import LinkRobotEnv
+from envs.config import RobotConfig
 
-# 创建推理实例
-infer = VitaInference(
-    checkpoint_dir="/path/to/checkpoint",
-    mixed_precision="bf16",
-    device="cuda:0"  # 可指定具体GPU: cuda:0, cuda:1 等
-)
+policy = VitaPolicy(checkpoint_dir="/path/to/checkpoint")
+config = RobotConfig.from_dict(cfg)
+env = LinkRobotEnv(config=config)
 
-# 构建观测
-observation = {
-    "observation": {
-        "images": {
-            "image": image_array,          # (C, H, W) float32
-            "wrist_right_image": wrist_img  # (C, H, W) float32
-        },
-        "state": state_array  # (7,) float32
-    }
-}
-
-# 更新观测并获取动作
-infer.update_obs(observation)
-action = infer.get_action()  # (action_horizon, action_dim)
-
-# 重置
-infer.reset()
+env.start()
+obs = env.get_obs()
+action = policy.predict(obs)  # (action_horizon, action_dim)
+env.step(action[0])
+env.stop()
 ```
 
-## 通信协议
+## 依赖
 
-客户端与服务器之间使用 TCP + JSON 协议通信。
-
-### 请求格式
-
-```json
-{
-    "cmd": "infer|reset|ping",
-    "obs": {...}  // 仅 infer 命令需要
-}
-```
-
-### 响应格式
-
-```json
-{
-    "action": [...],  // infer 命令返回
-    "ok": true        // reset/ping 命令返回
-}
-```
-
-## 模型参数
-
-基于训练配置 (`ur12e_real_libero_spatial`):
-
-| 参数 | 值 |
-|------|-----|
-| obs_horizon | 1 |
-| action_horizon | 8 |
-| pred_horizon | 16 |
-| action_dim | 7 |
-| state_dim | 7 |
-| image_keys | `observation.images.image`, `observation.images.wrist_right_image` |
-| resize_shape | (240, 320) |
-| crop_shape | (224, 308) |
-| fps | 30 |
+- Python 3.10+, PyTorch, Hydra
+- `flare` 包（VITA 训练代码）
+- `link` + `atlas`（机器人 SDK，仅 LinkRobotEnv 需要）
 
 ## 注意事项
 
-1. **图像预处理**: 图像需要归一化到 [0, 1]，格式为 CHW
-2. **动作队列**: 模型每次生成 8 步动作，可逐步执行
-3. **归一化**: 模型内部会处理状态和动作的归一化/反归一化
-4. **Checkpoint**: 需要包含 `model.safetensors` 和 `config.json`
+1. **图像格式**: CHW, float32, 归一化到 [0, 1]
+2. **动作安全**: 相邻帧关节变化超过 `action_delta_threshold` 会触发 `ActionSafetyError` 紧急停止
+3. **Checkpoint**: 需包含 `model.safetensors` + 训练 config YAML
 
-## 常见问题
+## 未来重构方向
 
-### 1. 模型加载失败
+### 模型加载独立化
+当前推理直接依赖 `flare` 训练代码（通过 `flare.factory.get_policy_class()` 动态实例化训练侧模型）。理想方案是将 config + stats 嵌入 safetensors checkpoint header，导出 inference-only 模型，但需要训练侧配合改 checkpoint 导出逻辑。
 
-确保 checkpoint 目录包含以下文件：
-- `model.safetensors`: 模型权重
-- `config.json`: 模型配置（由 `save_pretrained` 生成）
-
-### 2. 图像尺寸不匹配
-
-检查配置中的 `expected_size` 是否与实际相机分辨率匹配，或启用 `resize: true`。
-
-### 3. 动作维度错误
-
-确保 `mapping.model_arm_dof` 和 `use_gripper` 配置正确。
+### LinkRobotEnv 进一步解耦
+当前 `LinkCommunicator` 仍然直接构造 protobuf 消息。如果需要支持更多机器人 SDK，可以进一步抽象通信协议层。
