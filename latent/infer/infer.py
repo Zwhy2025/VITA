@@ -7,8 +7,8 @@ from omegaconf import DictConfig
 
 from policies import VitaPolicy
 from envs import LinkRobotEnv
-from envs.config import RobotConfig
 from runner import InferenceRunner
+from schemas import RobotConfig
 
 
 @hydra.main(config_path="configs", config_name="default", version_base=None)
@@ -17,8 +17,8 @@ def main(cfg: DictConfig) -> None:
     model_cfg = cfg.model
     policy = VitaPolicy(
         checkpoint_dir=model_cfg.checkpoint_dir,
-        mixed_precision=model_cfg.get("mixed_precision", "bf16"),
-        device=model_cfg.get("device", "cuda"),
+        mixed_precision=model_cfg.mixed_precision,
+        device=model_cfg.device,
     )
     policy.reset()
 
@@ -27,12 +27,12 @@ def main(cfg: DictConfig) -> None:
     env = LinkRobotEnv(config=robot_config)
 
     # 推理循环
-    runtime = cfg.get("runtime", {})
+    runtime = cfg.runtime
     runner = InferenceRunner(
         env=env,
         policy=policy,
-        max_steps=int(runtime.get("max_steps", 1000)),
-        send_freq=float(runtime.get("send_freq", 10)),
+        max_steps=int(runtime.max_steps),
+        send_freq=float(runtime.send_freq),
     )
 
     try:

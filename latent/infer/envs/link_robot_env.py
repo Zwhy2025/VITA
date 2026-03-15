@@ -10,8 +10,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from envs.config import ArmConfig, RobotConfig
 from envs.robot_env import RobotEnvBase
+from schemas import ArmConfig, RobotConfig
 
 logger = logging.getLogger(__name__)
 
@@ -101,18 +101,18 @@ class LinkCommunicator:
         # 机械臂发布器 + 订阅器
         for arm in self.arms:
             self.arm_publishers[arm.name] = self._node.CreatePublisher(
-                f"{arm.topic}/joint/servo", self._deps['ServoJoint'])
+                f"{arm.base_topic}/joint/servo", self._deps['ServoJoint'])
             self.gripper_publishers[arm.name] = self._node.CreatePublisher(
-                f"{arm.topic}/gripper/servo", self._deps['ServoEffector'])
+                f"{arm.base_topic}/gripper/servo", self._deps['ServoEffector'])
             self._node.CreateSubscriber(
-                f"{arm.topic}/robot/state",
+                f"{arm.base_topic}/robot/state",
                 lambda msg, name=arm.name: self._joint_cb(msg, name),
                 self._deps['RobotState'])
 
         # 相机订阅器（直接用 model_key 作为内部标识）
-        for model_key, topic in self.cameras.items():
+        for model_key, camera_topic in self.cameras.items():
             self._node.CreateSubscriber(
-                topic,
+                camera_topic,
                 lambda msg, key=model_key: self._camera_cb(msg, key),
                 self._deps['SImage'])
 

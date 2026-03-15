@@ -1,6 +1,10 @@
 # @package _global_
 # R2V2 双臂 7-DOF + 三相机
 
+defaults:
+  - base
+  - _self_
+
 link:
   cameras:
     image: "/embodied/head/manip_t/sensor/camera/color"
@@ -8,22 +12,8 @@ link:
     wrist_left_image: "/left_arm/manip_t/sensor/camera/color"
   arms:
     right_arm:
-      topic: "/right_arm/manip_t/controller"
+      base_topic: "/right_arm/manip_t/controller"
       dof: 7
     left_arm:
-      topic: "/left_arm/manip_t/controller"
+      base_topic: "/left_arm/manip_t/controller"
       dof: 7
-
-image:
-  expected_size: [320, 240]
-  normalize: true
-  resize: true
-
-sync:
-  block_timeout: 100.0
-  check_interval: 0.01
-  timestamp_tolerance: 0.0015
-  sync_target: image
-
-safety:
-  action_delta_threshold: 0.1

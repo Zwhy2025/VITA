@@ -1,7 +1,7 @@
 """
 机器人配置类定义
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
 
 
@@ -10,7 +10,7 @@ class ArmConfig:
     """单个机械臂配置"""
 
     name: str
-    topic: str
+    base_topic: str
     dof: int
 
 
@@ -18,19 +18,19 @@ class ArmConfig:
 class ImageConfig:
     """图像预处理配置"""
 
-    expected_size: Tuple[int, int] = (320, 240)
-    normalize: bool = True
-    resize: bool = False
+    expected_size: Tuple[int, int]
+    normalize: bool
+    resize: bool
 
 
 @dataclass
 class SyncConfig:
     """数据同步配置"""
 
-    block_timeout: float = 100.0
-    check_interval: float = 0.01
-    timestamp_tolerance: float = 0.03
-    sync_target: str = "image"  # "image" 或 "qpos"
+    block_timeout: float
+    check_interval: float
+    timestamp_tolerance: float
+    sync_target: str  # "image" 或 "qpos"
 
 
 @dataclass
@@ -43,9 +43,9 @@ class RobotConfig:
 
     arms: List[ArmConfig]
     cameras: Dict[str, str]  # model_image_key → topic
-    image: ImageConfig = field(default_factory=ImageConfig)
-    sync: SyncConfig = field(default_factory=SyncConfig)
-    action_delta_threshold: float = 0.1
+    image: ImageConfig
+    sync: SyncConfig
+    action_delta_threshold: float
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "RobotConfig":
@@ -55,7 +55,7 @@ class RobotConfig:
             link:
               arms:
                 right_arm:
-                  topic: "..."
+                  base_topic: "..."
                   dof: 6
               cameras:
                 image: "topic_url"
@@ -66,44 +66,57 @@ class RobotConfig:
             safety:
               action_delta_threshold: 0.1
         """
-        link_data = data.get("link", {})
+        for section_name in ("link", "image", "sync", "safety"):
+            if section_name not in data:
+                raise ValueError(f"缺少必需配置字段: {section_name}")
+
+        link_data = data["link"]
+        for section_name in ("arms", "cameras"):
+            if section_name not in link_data:
+                raise ValueError(f"link 缺少必需配置字段: {section_name}")
+
+        arms_data = link_data["arms"]
+        cameras = dict(link_data["cameras"])
+        img_data = data["image"]
+        sync_data = data["sync"]
+        safety_data = data["safety"]
 
         # 解析 arms（保留声明顺序）
         arms = []
-        arms_data = link_data.get("arms", {})
         for arm_name, arm_cfg in arms_data.items():
-            if isinstance(arm_cfg, dict):
-                if "dof" not in arm_cfg:
-                    raise ValueError(f"机械臂 '{arm_name}' 必须配置 dof")
-                arms.append(ArmConfig(
+            if "topic" in arm_cfg:
+                raise ValueError(
+                    f"机械臂 '{arm_name}' 使用了已废弃字段 'topic'，请改为 'base_topic'"
+                )
+            if "base_topic" not in arm_cfg:
+                raise ValueError(f"机械臂 '{arm_name}' 必须配置 base_topic")
+            if "dof" not in arm_cfg:
+                raise ValueError(f"机械臂 '{arm_name}' 必须配置 dof")
+            arms.append(
+                ArmConfig(
                     name=arm_name,
-                    topic=arm_cfg.get("topic", ""),
+                    base_topic=str(arm_cfg["base_topic"]),
                     dof=int(arm_cfg["dof"]),
-                ))
+                )
+            )
 
         # 解析 cameras（model_key → topic 直接映射）
-        cameras = dict(link_data.get("cameras", {}))
-
-        # 解析图像配置
-        img_data = data.get("image", {})
         image = ImageConfig(
-            expected_size=tuple(img_data.get("expected_size", [320, 240])),
-            normalize=bool(img_data.get("normalize", True)),
-            resize=bool(img_data.get("resize", False)),
+            expected_size=tuple(img_data["expected_size"]),
+            normalize=bool(img_data["normalize"]),
+            resize=bool(img_data["resize"]),
         )
 
         # 解析同步配置
-        sync_data = data.get("sync", {})
         sync = SyncConfig(
-            block_timeout=float(sync_data.get("block_timeout", 100.0)),
-            check_interval=float(sync_data.get("check_interval", 0.01)),
-            timestamp_tolerance=float(sync_data.get("timestamp_tolerance", 0.03)),
-            sync_target=str(sync_data.get("sync_target", "image")),
+            block_timeout=float(sync_data["block_timeout"]),
+            check_interval=float(sync_data["check_interval"]),
+            timestamp_tolerance=float(sync_data["timestamp_tolerance"]),
+            sync_target=str(sync_data["sync_target"]),
         )
 
         # 解析安全配置
-        safety_data = data.get("safety", {})
-        action_delta_threshold = float(safety_data.get("action_delta_threshold", 0.1))
+        action_delta_threshold = float(safety_data["action_delta_threshold"])
 
         return cls(
             arms=arms,
@@ -122,13 +135,13 @@ class RobotConfig:
             errors.append("至少需要配置一个相机")
 
         for arm in self.arms:
-            if not arm.topic:
-                errors.append(f"机械臂 '{arm.name}' 缺少 topic")
+            if not arm.base_topic:
+                errors.append(f"机械臂 '{arm.name}' 缺少 base_topic")
             if arm.dof <= 0:
                 errors.append(f"机械臂 '{arm.name}' dof 必须大于 0")
 
-        for model_key, topic in self.cameras.items():
-            if not topic:
+        for model_key, camera_topic in self.cameras.items():
+            if not camera_topic:
                 errors.append(f"相机 '{model_key}' 缺少 topic")
 
         return errors

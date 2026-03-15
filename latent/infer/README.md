@@ -7,6 +7,7 @@
 ```
 latent/infer/
 ├── infer.py                # Hydra 入口
+├── schemas.py              # RobotConfig, ArmConfig, ImageConfig, SyncConfig
 ├── runner.py               # InferenceRunner 推理编排
 ├── policies/               # 策略层
 │   ├── base_policy.py      # PolicyBase 抽象基类
@@ -15,10 +16,10 @@ latent/infer/
 ├── envs/                   # 环境层
 │   ├── robot_env.py        # RobotEnvBase 抽象基类
 │   ├── link_robot_env.py   # LinkRobotEnv + LinkCommunicator + ObservationBuilder
-│   └── config.py           # RobotConfig, ArmConfig, ImageConfig, SyncConfig
 └── configs/                # Hydra 配置
     ├── default.yaml        # 默认配置（模型 + 运行时）
     └── robot/              # 按机器人类型分
+        ├── base.yaml       # 机器人共享默认值
         ├── ur12e.yaml      # UR12e 单臂 6-DOF
         └── dual_r2v2.yaml  # R2V2 双臂 7-DOF
 ```
@@ -54,10 +55,15 @@ python infer.py model.device=cuda:1 runtime.max_steps=500
 
 ## 配置
 
-使用 Hydra 管理配置，按机器人类型组织。配置直接映射模型 image key 到硬件 topic：
+使用 Hydra 管理配置，按机器人类型组织。机械臂使用 `base_topic` 表示控制路径前缀，
+相机配置仍直接映射模型 image key 到完整订阅 topic：
 
 ```yaml
 # configs/robot/ur12e.yaml
+defaults:
+  - base
+  - _self_
+
 link:
   cameras:
     # model image key → topic（直接映射，无中间层）
@@ -66,16 +72,8 @@ link:
   arms:
     # 声明顺序 = 模型 state/action 向量中的臂顺序
     right_arm:
-      topic: "/right_arm/manip_t/controller"
+      base_topic: "/right_arm/manip_t/controller"
       dof: 6    # 必须配置
-
-image:
-  expected_size: [320, 240]
-  normalize: true
-  resize: true
-
-sync:
-  sync_target: image
 
 safety:
   action_delta_threshold: 0.2
@@ -86,7 +84,7 @@ safety:
 ```python
 from policies.vita_policy import VitaPolicy
 from envs.link_robot_env import LinkRobotEnv
-from envs.config import RobotConfig
+from schemas import RobotConfig
 
 policy = VitaPolicy(checkpoint_dir="/path/to/checkpoint")
 config = RobotConfig.from_dict(cfg)
