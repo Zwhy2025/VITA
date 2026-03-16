@@ -1,0 +1,14 @@
+defaults:
+  - _self_
+  - robot: ur12e
+
+# 模型配置
+model:
+  checkpoint_dir: "/root/workspace/VITA/checkpoints/step_0000008000"
+  mixed_precision: "bf16"  # bf16|fp16|fp32
+  device: "cuda:0"
+
+# 推理运行配置
+runtime:
+  send_freq: 5       # 动作发送频率 (Hz)，与训练 fps 保持一致
+  max_steps: 1000

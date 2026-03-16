@@ -1,0 +1,18 @@
+# @package _global_
+# UR12e 单臂 6-DOF + 双相机
+
+defaults:
+  - base
+  - _self_
+
+link:
+  cameras:
+    image: "/embodied/front/manip_t/sensor/camera/color"
+    wrist_right_image: "/right_arm/manip_t/sensor/camera/color"
+  arms:
+    right_arm:
+      base_topic: "/right_arm/manip_t/controller"
+      dof: 6
+
+safety:
+  action_delta_threshold: 0.2

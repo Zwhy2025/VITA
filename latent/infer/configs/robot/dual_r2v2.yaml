@@ -1,0 +1,19 @@
+# @package _global_
+# R2V2 双臂 7-DOF + 三相机
+
+defaults:
+  - base
+  - _self_
+
+link:
+  cameras:
+    image: "/embodied/head/manip_t/sensor/camera/color"
+    wrist_right_image: "/right_arm/manip_t/sensor/camera/color"
+    wrist_left_image: "/left_arm/manip_t/sensor/camera/color"
+  arms:
+    right_arm:
+      base_topic: "/right_arm/manip_t/controller"
+      dof: 7
+    left_arm:
+      base_topic: "/left_arm/manip_t/controller"
+      dof: 7
