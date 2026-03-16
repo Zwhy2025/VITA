@@ -47,6 +47,7 @@ class VitaPolicy(PolicyBase):
             动作序列 (action_horizon, action_dim)
         """
         device = next(self._model.parameters()).device
+        device_type = device.type
 
         # numpy → torch
         obs_dict = dict_apply(obs, lambda x: torch.from_numpy(x).to(device=device))
@@ -60,7 +61,10 @@ class VitaPolicy(PolicyBase):
             else:
                 obs_batch[k] = v
 
-        ctx = torch.autocast(device_type=device.split(':')[0], dtype=self._dtype) if self._dtype != torch.float32 else nullcontext()
+        if self._dtype != torch.float32:
+            ctx = torch.autocast(device_type=device_type, dtype=self._dtype)
+        else:
+            ctx = nullcontext()
         with torch.no_grad(), ctx:
             # 添加 sequence 维度，筛选模型需要的 key
             valid_keys = self._model.config.task.image_keys + [self._model.config.task.state_key]

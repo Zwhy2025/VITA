@@ -81,6 +81,7 @@ class LinkCommunicator:
         self.arm_locks = {arm.name: threading.Lock() for arm in arms}
         self.arm_publishers: Dict[str, Any] = {}
         self.gripper_publishers: Dict[str, Any] = {}
+        self.arm_subscribers: Dict[str, Any] = {}
 
         # 图像存储（按 model_key 索引）
         self.image_keys = list(cameras.keys())
@@ -89,11 +90,13 @@ class LinkCommunicator:
             for key in self.image_keys
         }
         self.image_locks = {key: threading.Lock() for key in self.image_keys}
+        self.camera_subscribers: Dict[str, Any] = {}
 
     def start(self):
         if self.is_running:
             return
 
+        logger.info('Initializing link node')
         link_mod = self._deps['link']
         link_mod.Node.Initialize("vita_robot_env")
         self._node = link_mod.GetNode()
@@ -104,17 +107,19 @@ class LinkCommunicator:
                 f"{arm.base_topic}/joint/servo", self._deps['ServoJoint'])
             self.gripper_publishers[arm.name] = self._node.CreatePublisher(
                 f"{arm.base_topic}/gripper/servo", self._deps['ServoEffector'])
-            self._node.CreateSubscriber(
+            self.arm_subscribers[arm.name] = self._node.CreateSubscriber(
                 f"{arm.base_topic}/robot/state",
                 lambda msg, name=arm.name: self._joint_cb(msg, name),
                 self._deps['RobotState'])
+            logger.info('[start] arm subscriber ready: arm=%s topic=%s/robot/state', arm.name, arm.base_topic)
 
         # 相机订阅器（直接用 model_key 作为内部标识）
         for model_key, camera_topic in self.cameras.items():
-            self._node.CreateSubscriber(
+            self.camera_subscribers[model_key] = self._node.CreateSubscriber(
                 camera_topic,
                 lambda msg, key=model_key: self._camera_cb(msg, key),
                 self._deps['SImage'])
+            logger.info('[start] camera subscriber ready: key=%s topic=%s', model_key, camera_topic)
 
         self.is_running = True
         self._spin_thread = threading.Thread(target=self._spin, daemon=True)
@@ -131,6 +136,8 @@ class LinkCommunicator:
         if self._node:
             self._node.Shutdown()
             self._node = None
+        self.arm_subscribers.clear()
+        self.camera_subscribers.clear()
         logger.info("LinkCommunicator stopped")
 
     def get_joint_state(self, arm_name: str) -> Tuple[List[float], float, float]:
@@ -329,9 +336,12 @@ class LinkRobotEnv(RobotEnvBase):
 
     def get_obs(self) -> Dict[str, Any]:
         start_time = time.time()
-
+        last_wait_log_time = 0.0
+      
         while self.comm.is_running:
-            if time.time() - start_time > self.config.sync.block_timeout:
+            now = time.time()
+            elapsed = now - start_time
+            if elapsed > self.config.sync.block_timeout:
                 logger.warning(f"get_obs timeout ({self.config.sync.block_timeout}s)")
                 return {}
 
@@ -339,33 +349,66 @@ class LinkRobotEnv(RobotEnvBase):
             all_ok = True
             raw_images = {}
             obs_ts = {}
+            missing_images = []
             for model_key in self.obs_builder.image_keys:
                 rgb, ts = self.comm.get_image(model_key)
                 if rgb is None or rgb.size == 0:
                     all_ok = False
+                    missing_images.append(model_key)
                     break
                 raw_images[model_key] = rgb
                 obs_ts[f"image_ts_{model_key}"] = ts
 
             if not all_ok:
+                if now - last_wait_log_time >= 1.0:
+                    logger.info(
+                        'Waiting for images after %.2fs, missing=%s, available=%s',
+                        elapsed,
+                        missing_images,
+                        [key for key in self.obs_builder.image_keys if key not in missing_images],
+                    )
+                    last_wait_log_time = now
                 time.sleep(self.config.sync.check_interval)
                 continue
 
             # 收集关节状态
             qpos = []
+            missing_qpos = []
             for arm in self.config.arms:
                 joints, gripper, ts = self.comm.get_joint_state(arm.name)
+                if len(joints) < arm.dof or ts < 0:
+                    missing_qpos.append(arm.name)
                 qpos.extend(joints)
                 qpos.append(gripper)
                 obs_ts[f"qpos_ts_{arm.name}"] = ts
 
+            if missing_qpos:
+                if now - last_wait_log_time >= 1.0:
+                    logger.info(
+                        'Waiting for joint states after %.2fs, missing=%s',
+                        elapsed,
+                        missing_qpos,
+                    )
+                    last_wait_log_time = now
+                time.sleep(self.config.sync.check_interval)
+                continue
+
             # 检查是否是新数据
             if not self._is_updated(obs_ts):
+                if now - last_wait_log_time >= 1.0:
+                    logger.info(
+                        'Waiting for updated %s data after %.2fs, obs_ts=%s',
+                        self.config.sync.sync_target,
+                        elapsed,
+                        obs_ts,
+                    )
+                    last_wait_log_time = now
                 time.sleep(self.config.sync.check_interval)
                 continue
 
             self.last_obs_ts = obs_ts.copy()
             qpos_arr = np.array(qpos, dtype=np.float32)
+            logger.info('Observation ready after %.2fs', elapsed)
             return self.obs_builder.build(raw_images, qpos_arr)
 
         return {}
